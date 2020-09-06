@@ -7,17 +7,19 @@ import (
 	"github.com/dustin/go-humanize"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-//func init() {
-//	go func() {
-//		log.Println(http.ListenAndServe("localhost:8066", nil))
-//	}()
-//}
+func init() {
+	go func() {
+		http.HandleFunc("/lure", httpStats)
+		log.Println(http.ListenAndServe("localhost:8666", nil))
+	}()
+}
 
 var diskFilter = []string{"sda", "sda1"}
 
@@ -67,7 +69,9 @@ func main() {
 
 		var stat syscall.Statfs_t
 
-		syscall.Statfs(diskDevPath, &stat)
+		err := syscall.Statfs(diskDevPath, &stat)
+
+		check(err)
 
 		fmt.Println(disk, "block/sector size:", stat.Bsize)
 		fmt.Println(disk, "blocks:", stat.Blocks)
@@ -97,7 +101,7 @@ func sampleStats() {
 		tm.MoveCursor(1, 1)
 		currentTime := time.Now()
 		strHeader := "Time: " + currentTime.String() + " | Sample Interval: " + strconv.Itoa(interval) + "s" + " | Samples: " + strconv.Itoa(sampleCount)
-		tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
+		_, _ = tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
 
 		prevSample, err := ioutil.ReadFile("/proc/diskstats")
 
@@ -182,10 +186,18 @@ func sampleStats() {
 		}
 
 		for key, device := range diskStats {
-			tm.Println(key, "\tRead Ops:", device.readOps, "\tWrite Ops:", device.writeOps, "\tRead Bytes:", humanize.Bytes(device.readBytes/8), "\tWrite Bytes:", humanize.Bytes(device.writeBytes/8))
+			_, _ = tm.Println(key, "\tRead Ops:", device.readOps, "\tWrite Ops:", device.writeOps, "\tRead Bytes:", humanize.Bytes(device.readBytes/8), "\tWrite Bytes:", humanize.Bytes(device.writeBytes/8))
 		}
 
 		tm.Flush()
 	}
 
+}
+
+func httpStats(w http.ResponseWriter, r *http.Request) {
+	_, _ = fmt.Fprintln(w, "Hello Suckers!")
+	for name, device := range diskStats {
+		_, _ = fmt.Fprintf(w, name)
+		_, _ = fmt.Fprintln(w, "\tRead Ops:", device.readOps, "\tWrite Ops:", device.writeOps, "\tRead Bytes:", humanize.Bytes(device.readBytes/8), "\tWrite Bytes:", humanize.Bytes(device.writeBytes/8))
+	}
 }
