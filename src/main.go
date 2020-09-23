@@ -8,39 +8,25 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
-func init() {
-	go func() {
-		http.HandleFunc("/lure", httpStats)
-		log.Println(http.ListenAndServe("localhost:8666", nil))
-	}()
-}
-
-var diskFilter = []string{"sda", "sda1"}
-
-var diskStats = make(map[string]Stats)
-
-type Stats struct {
-	readOps    uint64
-	writeOps   uint64
-	readBytes  uint64
-	writeBytes uint64
-	resolution int
-}
-
-type DiskInfo struct {
-	blocks    uint64
-	blockSize int64
-}
-
-var diskBlockInfo = make(map[string]DiskInfo)
-
-var interval = 1
+var (
+	interval        uint64
+	mapMDTCalcStats = make(map[string]map[string]uint64)
+	mapOSTCalcStats = make(map[string]map[string]uint64)
+	pathToMdts      = "/proc/fs/lustre/mdt"
+	pathToOSTs      = "/proc/fs/lustre/obdfilter"
+	mapMDTs         = make(map[string]string)
+	mapOSTs         = make(map[string]string)
+	mdtCounters     = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
+		"setattr", "getxattr", "setxattr", "statfs", "sync", "s_rename", "c_rename"}
+	ostCounters = []string{"write_bytes", "read_bytes", "setattr", "statfs", "create", "destroy", "punch", "sync", "get_info", "set_info"}
+	hostname, _ = os.Hostname()
+)
 
 func check(e error) {
 	if e != nil {
@@ -48,156 +34,255 @@ func check(e error) {
 	}
 }
 
-func Find(slice []string, val string) (int, bool) {
-	for i, item := range slice {
-		if item == val {
-			return i, true
+//func Find(slice []string, val string) (int, bool) {
+//	for i, item := range slice {
+//		if item == val {
+//			return i, true
+//		}
+//	}
+//	return -1, false
+//}
+
+func getMDTs() {
+	files, err := ioutil.ReadDir(pathToMdts)
+	check(err)
+	for _, entry := range files {
+		if entry.IsDir() {
+			log.Println("Found:", entry.Name())
+			mapMDTs[entry.Name()] = pathToMdts + "/" + entry.Name() + "/md_stats"
 		}
 	}
-	return -1, false
+	if len(mapMDTs) == 0 {
+		log.Fatal("No MTDs found.")
+	}
+}
+
+func getOSTs() {
+	files, err := ioutil.ReadDir(pathToOSTs)
+	check(err)
+	for _, entry := range files {
+		if entry.IsDir() {
+			log.Println("Found:", entry.Name())
+			mapOSTs[entry.Name()] = pathToOSTs + "/" + entry.Name() + "/stats"
+		}
+	}
+	if len(mapMDTs) == 0 {
+		log.Fatal("No MTDs found.")
+	}
 }
 
 func main() {
 
-	flag.IntVar(&interval, "interval", 1, "Sample interval in seconds, the default is 1.")
+	var httpPort int
+
+	flag.Uint64Var(&interval, "interval", 1, "Sample interval in seconds, the default is 1.")
+	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web. Default is 8666.")
 
 	flag.Parse()
 
-	for _, disk := range diskFilter {
+	go func() {
+		http.HandleFunc("/stats", httpStats)
+		var baseURL = "localhost:" + strconv.Itoa(httpPort)
+		log.Println(http.ListenAndServe(baseURL, nil))
+	}()
 
-		diskDevPath := "/dev/" + disk
-
-		var stat syscall.Statfs_t
-
-		err := syscall.Statfs(diskDevPath, &stat)
-
-		check(err)
-
-		fmt.Println(disk, "block/sector size:", stat.Bsize)
-		fmt.Println(disk, "blocks:", stat.Blocks)
-
-		info := DiskInfo{}
-		info.blocks = stat.Blocks
-		info.blockSize = stat.Bsize
-
-		diskBlockInfo[disk] = info
-	}
-	//fmt.Println(diskBlockInfo)
-
-	//http.HandleFunc("/", returnStats)
-
-	sampleStats()
-}
-
-func sampleStats() {
-
-	timeInterval := time.Duration(interval) * time.Second
-
-	var sampleCount = 0
+	getMDTs()
+	getOSTs()
 
 	for {
+		timeInterval := time.Duration(interval) * time.Second
 
 		tm.Clear() // Clear current screen
 		tm.MoveCursor(1, 1)
 		currentTime := time.Now()
-		strHeader := "Time: " + currentTime.String() + " | Sample Interval: " + strconv.Itoa(interval) + "s" + " | Samples: " + strconv.Itoa(sampleCount)
+		strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " + strconv.FormatUint(interval, 10) + "s"
 		_, _ = tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
 
-		prevSample, err := ioutil.ReadFile("/proc/diskstats")
+		var mapMDTPrevStats = make(map[string]map[string]uint64)
+		var mapMDTNewStats = make(map[string]map[string]uint64)
+		var mapMDTPrevStatsRaw = make(map[string][]byte)
+		var mapMDTNewStatsRaw = make(map[string][]byte)
+		var mapOSTPrevStats = make(map[string]map[string]uint64)
+		var mapOSTNewStats = make(map[string]map[string]uint64)
+		var mapOSTPrevStatsRaw = make(map[string][]byte)
+		var mapOSTNewStatsRaw = make(map[string][]byte)
+
+		for key, mdt := range mapMDTs {
+			prevSample, err := ioutil.ReadFile(mdt)
+			check(err)
+			mapMDTPrevStatsRaw[key] = prevSample
+		}
+		for key, ost := range mapOSTs {
+			prevSample, err := ioutil.ReadFile(ost)
+			check(err)
+			mapOSTPrevStatsRaw[key] = prevSample
+		}
 
 		time.Sleep(timeInterval)
 
-		newSample, err := ioutil.ReadFile("/proc/diskstats")
-
-		sampleCount++
-
-		check(err)
-
-		var slcPrevStats = strings.Split(string(prevSample), "\n")
-		var slcNewStats = strings.Split(string(newSample), "\n")
-
-		var prevReads uint64 = 0
-		var prevWrites uint64 = 0
-		var newReads uint64 = 0
-		var newWrites uint64 = 0
-		var prevReadSectors uint64 = 0
-		var prevWriteSectors uint64 = 0
-		var newReadSectors uint64 = 0
-		var newWriteSectors uint64 = 0
-
-		for _, device := range diskFilter {
-
-			sampledStats := Stats{}
-
-			for _, line := range slcPrevStats {
-
-				if len(line) > 1 {
-
-					var device = strings.Fields(line)[2]
-					_, found := Find(diskFilter, device)
-
-					if found {
-						prevReads, _ = strconv.ParseUint(strings.Fields(line)[3], 10, 64)
-						prevWrites, _ = strconv.ParseUint(strings.Fields(line)[7], 10, 64)
-						prevReadSectors, _ = strconv.ParseUint(strings.Fields(line)[5], 10, 64)
-						prevWriteSectors, _ = strconv.ParseUint(strings.Fields(line)[9], 10, 64)
-					}
-				}
-			}
-			for _, line := range slcNewStats {
-
-				if len(line) > 1 {
-
-					var device = strings.Fields(line)[2]
-					_, found := Find(diskFilter, device)
-
-					if found {
-						newReads, _ = strconv.ParseUint(strings.Fields(line)[3], 10, 64)
-						newWrites, _ = strconv.ParseUint(strings.Fields(line)[7], 10, 64)
-						newReadSectors, _ = strconv.ParseUint(strings.Fields(line)[5], 10, 64)
-						newWriteSectors, _ = strconv.ParseUint(strings.Fields(line)[9], 10, 64)
-					}
-				}
-			}
-			if newReads > prevReads {
-				sampledStats.readOps = (newReads - prevReads) / uint64(interval)
-			} else {
-				sampledStats.readOps = 0
-			}
-			if newWrites > prevWrites {
-				sampledStats.writeOps = (newWrites - prevWrites) / uint64(interval)
-			} else {
-				sampledStats.writeOps = 0
-			}
-			if newReadSectors > prevReadSectors {
-				sampledStats.readBytes = (newReadSectors - prevReadSectors) * uint64(diskBlockInfo[device].blockSize) / uint64(interval)
-			} else {
-				sampledStats.readBytes = 0
-			}
-			if newWriteSectors > prevWriteSectors {
-				sampledStats.writeBytes = (newWriteSectors - prevWriteSectors) * uint64(diskBlockInfo[device].blockSize) / uint64(interval)
-			} else {
-				sampledStats.writeBytes = 0
-			}
-
-			sampledStats.resolution = 1
-
-			diskStats[device] = sampledStats
+		for key, mdt := range mapMDTs {
+			newSample, err := ioutil.ReadFile(mdt)
+			check(err)
+			mapMDTNewStatsRaw[key] = newSample
 		}
 
-		for key, device := range diskStats {
-			_, _ = tm.Println(key, "\tRead Ops:", device.readOps, "\tWrite Ops:", device.writeOps, "\tRead Bytes:", humanize.Bytes(device.readBytes/8), "\tWrite Bytes:", humanize.Bytes(device.writeBytes/8))
+		for key, ost := range mapOSTs {
+			newSample, err := ioutil.ReadFile(ost)
+			check(err)
+			mapOSTNewStatsRaw[key] = newSample
 		}
 
+		for mdt, value := range mapMDTPrevStatsRaw {
+			var slcPrevStats = strings.Split(string(value), "\n")
+			slcPrevStats = slcPrevStats[1 : len(slcPrevStats)-1]
+			var prevCounters = make(map[string]uint64)
+
+			for _, item := range slcPrevStats {
+				var fields = strings.Fields(item)
+				prevCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
+				mapMDTPrevStats[mdt] = prevCounters
+			}
+		}
+		for mdt, value := range mapMDTNewStatsRaw {
+			var slcNewStats = strings.Split(string(value), "\n")
+			slcNewStats = slcNewStats[1 : len(slcNewStats)-1]
+			var newCounters = make(map[string]uint64)
+
+			for _, item := range slcNewStats {
+				var fields = strings.Fields(item)
+				newCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
+				mapMDTNewStats[mdt] = newCounters
+			}
+		}
+		for ost, value := range mapOSTPrevStatsRaw {
+			var slcPrevStats = strings.Split(string(value), "\n")
+			slcPrevStats = slcPrevStats[1 : len(slcPrevStats)-1]
+			var prevCounters = make(map[string]uint64)
+
+			for _, item := range slcPrevStats {
+				var fields = strings.Fields(item)
+				if strings.Contains(fields[0], "bytes") {
+					prevCounters[fields[0]], _ = strconv.ParseUint(fields[6], 10, 64)
+				} else {
+					prevCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
+				}
+				mapOSTPrevStats[ost] = prevCounters
+			}
+		}
+		for ost, value := range mapOSTNewStatsRaw {
+			var slcNewStats = strings.Split(string(value), "\n")
+			slcNewStats = slcNewStats[1 : len(slcNewStats)-1]
+			var newCounters = make(map[string]uint64)
+
+			for _, item := range slcNewStats {
+				var fields = strings.Fields(item)
+				if strings.Contains(fields[0], "bytes") {
+					newCounters[fields[0]], _ = strconv.ParseUint(fields[6], 10, 64)
+				} else {
+					newCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
+				}
+				mapOSTNewStats[ost] = newCounters
+			}
+		}
+		for mdt, value := range mapMDTPrevStats {
+			var mapCalcCounter = make(map[string]uint64)
+			for key := range value {
+				var calcCounter = (mapMDTNewStats[mdt][key] - mapMDTPrevStats[mdt][key]) / interval
+				mapCalcCounter[key] = calcCounter
+			}
+			mapMDTCalcStats[mdt] = mapCalcCounter
+		}
+		for ost, value := range mapOSTPrevStats {
+			var mapCalcCounter = make(map[string]uint64)
+			for key := range value {
+				var calcCounter = (mapOSTNewStats[ost][key] - mapOSTPrevStats[ost][key]) / interval
+				mapCalcCounter[key] = calcCounter
+			}
+			mapOSTCalcStats[ost] = mapCalcCounter
+		}
 		tm.Flush()
+		fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
+		fmt.Printf("%15s", "Device")
+		for _, item := range mdtCounters {
+			fmt.Printf("%10s", item)
+		}
+		fmt.Print("\n")
+		for mdt, counters := range mapMDTCalcStats {
+			fmt.Printf("%15s", mdt)
+			for _, counter := range mdtCounters {
+				if v, found := counters[counter]; found {
+					fmt.Printf("%10d", v)
+				} else {
+					fmt.Printf("%10d", 0)
+				}
+			}
+			fmt.Print("\n")
+		}
+		fmt.Println()
+		fmt.Println(tm.Bold("OST Operation Stats /s:"))
+		fmt.Printf("%15s", "Device")
+		for _, item := range ostCounters {
+			fmt.Printf("%13s", item)
+		}
+		fmt.Print("\n")
+		for ost, counters := range mapOSTCalcStats {
+			fmt.Printf("%15s", ost)
+			for _, counter := range ostCounters {
+				if v, found := counters[counter]; found {
+					if strings.Contains(counter, "bytes") {
+						fmt.Printf("%13s", humanize.Bytes(v))
+					} else {
+						fmt.Printf("%13d", v)
+					}
+				} else {
+					fmt.Printf("%13d", 0)
+				}
+			}
+			fmt.Print("\n")
+		}
 	}
-
 }
 
-func httpStats(w http.ResponseWriter, r *http.Request) {
-	_, _ = fmt.Fprintln(w, "Hello Suckers!")
-	for name, device := range diskStats {
-		_, _ = fmt.Fprintf(w, name)
-		_, _ = fmt.Fprintln(w, "\tRead Ops:", device.readOps, "\tWrite Ops:", device.writeOps, "\tRead Bytes:", humanize.Bytes(device.readBytes/8), "\tWrite Bytes:", humanize.Bytes(device.writeBytes/8))
+func httpStats(w http.ResponseWriter, _ *http.Request) {
+	currentTime := time.Now()
+	strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " + strconv.FormatUint(interval, 10) + "s"
+	_, _ = fmt.Fprintln(w, strHeader)
+	_, _ = fmt.Fprintln(w, "MDT Metadata Stats /s:")
+	_, _ = fmt.Fprintf(w, "%15s", "Device")
+	for _, item := range mdtCounters {
+		_, _ = fmt.Fprintf(w, "%10s", item)
+	}
+	_, _ = fmt.Fprint(w, "\n")
+	for mdt, counters := range mapMDTCalcStats {
+		_, _ = fmt.Fprintf(w, "%15s", mdt)
+		for _, counter := range mdtCounters {
+			if v, found := counters[counter]; found {
+				_, _ = fmt.Fprintf(w, "%10d", v)
+			} else {
+				_, _ = fmt.Fprintf(w, "%10d", 0)
+			}
+		}
+		_, _ = fmt.Fprint(w, "\n")
+	}
+	_, _ = fmt.Fprintln(w, "OST Operation Stats /s:")
+	_, _ = fmt.Fprintf(w, "%15s", "Device")
+	for _, item := range ostCounters {
+		_, _ = fmt.Fprintf(w, "%13s", item)
+	}
+	_, _ = fmt.Fprint(w, "\n")
+	for ost, counters := range mapOSTCalcStats {
+		_, _ = fmt.Fprintf(w, "%15s", ost)
+		for _, counter := range ostCounters {
+			if v, found := counters[counter]; found {
+				if strings.Contains(counter, "bytes") {
+					_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+				} else {
+					_, _ = fmt.Fprintf(w, "%13d", v)
+				}
+			} else {
+				_, _ = fmt.Fprintf(w, "%13d", 0)
+			}
+		}
+		_, _ = fmt.Fprint(w, "\n")
 	}
 }
