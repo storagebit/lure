@@ -34,15 +34,6 @@ func check(e error) {
 	}
 }
 
-//func Find(slice []string, val string) (int, bool) {
-//	for i, item := range slice {
-//		if item == val {
-//			return i, true
-//		}
-//	}
-//	return -1, false
-//}
-
 func getMDTs() {
 	files, err := ioutil.ReadDir(pathToMdts)
 	check(err)
