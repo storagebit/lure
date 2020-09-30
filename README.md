@@ -2,15 +2,16 @@
 Lustre Filesystem Realtime Ressource Explorer
 
 ## What is it?
-lure is a tool alowing you to monitor lustre critical components statistics and status in relatime via a simple to use commandline utility. 
+lure is a tool allowing you to monitor lustre components statistics and status in relatime via a very simple to use commandline utility. 
 
 It also provides the stats available via web browser interface.
 
 ## Note
 For ldiskfs based lustre systems only. No plans and no desire to support ZFS specific stuff.
 
-Also, I started this project as I was in need of a very simple to use tool which doesn't have dependencies, can be easily distributed(just copy the binary) and doesn't require a PhD either just to get it build and working.
-The code might look a bit clunky here and there as it's just the first iteration but it does the job for me and I'll see where I can improve it if required.
+Also, I started this project as I was in need of a very simple to use tool which doesn't have 3rd party package or other software dependencies, can be easily distributed(just copy the binary to the server you want to look at) and doesn't require a PhD to get it build and working.
+The code might look a bit clunky here and there in it's first iteration but it does the job for me and I'll see where I can improve it if required.
+I'll also add more code documentation as I work on it and time allows.
 
 ## Current functionality:
 ### MDS Stats
