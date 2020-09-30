@@ -73,8 +73,8 @@ func main() {
 
 	flag.Uint64Var(&interval, "interval", 1, "Sample interval in seconds")
 	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web browser.")
-	flag.BoolVar(&ignoreMDTStats, "ignore-mdt", false, "Dont report MDT stats.")
-	flag.BoolVar(&ignoreOSTStats, "ignore-ost", false, "Dont report OST stats.")
+	flag.BoolVar(&ignoreMDTStats, "ignoremdt", false, "Don't report MDT stats.")
+	flag.BoolVar(&ignoreOSTStats, "ignoreost", false, "Don't report OST stats.")
 
 	flag.Parse()
 

@@ -1,16 +1,16 @@
 # lure
-Lustre Filesystem Realtime Ressource Explorer
+Lustre Filesystem Realtime Resource Explorer
 
 ## What is it?
-lure is a tool allowing you to monitor lustre components statistics and status in relatime via a very simple to use commandline utility. 
+lure is a tool allowing you to monitor lustre components statistics and status in realtime via a very simple to use commandline utility. 
 
 It also provides the stats available via web browser interface.
 
 ## Note
 For ldiskfs based lustre systems only. No plans and no desire to support ZFS specific stuff.
 
-Also, I started this project as I was in need of a very simple to use tool which doesn't have 3rd party package or other software dependencies, can be easily distributed(just copy the binary to the server you want to look at) and doesn't require a PhD to get it build and working.
-The code might look a bit clunky here and there in it's first iteration but it does the job for me and I'll see where I can improve it if required.
+Also, I started this project as I was in need of a very simple to use tool which doesn't have 3rd party package or other software dependencies, can be easily distributed(just copy the binary to the server you want to look at) and doesn't require a PhD to get it built and working.
+The code might look a bit clunky here and there in its first iteration, but it does the job for me, and I'll see where I can improve it, if required.
 I'll also add more code documentation as I work on it and time allows.
 
 ## Current functionality:
@@ -24,8 +24,8 @@ I'll also add more code documentation as I work on it and time allows.
 - Report MDT and OST performance statistics
 
 ## Stuff I'm working on for the next release
-- clean up and streamline some code and evalute if more parallelzation is required
-- add option/flag to run as backround process allowing the user to access the stats via web only
+- clean up and streamline some code and evaluate if more parallelization is required
+- add option/flag to run as background process allowing the user to access the stats via web only
 - add capacity and inode ldiskfs consumption reporting
 
 ## A bit further out
@@ -36,11 +36,11 @@ I'll also add more code documentation as I work on it and time allows.
 Quite simple actually. 
 Just download the binary from here and run it on your MDS or OSS.
 
-Or `git clone https://github.com/storagebit/lure/` and `cd` into the `bin` subfolder where you find the binary or build and compile it from the source in the `src` directory.
+Or `git clone https://github.com/storagebit/lure/` and `cd` into the `bin` directory where you find the binary or build and compile it from the source in the `src` directory.
 The choice is yours.
 
 ## How to use it
-Also quite simple
+Also, quite simple.
 ```
 $ ./lure -h
 Usage of ./lure:
@@ -56,7 +56,7 @@ Usage of ./lure:
 ```
 To access the stats via web browser use: `http://<ip address>:<port number>/stats` as the URL
 
-If you want to web access only, run lure in a fashion similar to: `nohup ./lure /dev/null 2>&1 &` - The upcoming functionality allowing to run daemonized in the backround will make this obsolete.
+If you want to web access only, run lure in a fashion similar to: `nohup ./lure /dev/null 2>&1 &` - The upcoming functionality allowing it to run demonized in the background will make this obsolete.
 
 ## Sample command line output(web will look very similar)
 ```
