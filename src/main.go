@@ -25,10 +25,16 @@ var (
 	mapOSTs         = make(map[string]string)
 	mdtCounters     = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
 		"setattr", "getxattr", "setxattr", "statfs", "sync", "s_rename", "c_rename"}
-	ostCounters    = []string{"write_bytes", "read_bytes", "setattr", "statfs", "create", "destroy", "punch", "sync", "get_info", "set_info"}
+	ostCounters = []string{"write_bytes", "read_bytes", "setattr", "statfs", "create", "destroy", "punch", "sync",
+		"get_info", "set_info"}
 	hostname, _    = os.Hostname()
 	ignoreMDTStats bool
 	ignoreOSTStats bool
+	runDaemonized  bool
+	flgVersion     bool
+	buildSha1      string // sha1 revision used to build the program
+	buildTime      string // when the executable was built
+	buildBranch    string
 )
 
 func checkContinue(e error) {
@@ -75,9 +81,15 @@ func main() {
 	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web browser.")
 	flag.BoolVar(&ignoreMDTStats, "ignoremdt", false, "Don't report MDT stats.")
 	flag.BoolVar(&ignoreOSTStats, "ignoreost", false, "Don't report OST stats.")
+	flag.BoolVar(&runDaemonized, "daemon", false, "Run as daemon in the background. No console output but stats available via web interface.")
+	flag.BoolVar(&flgVersion, "version", false, "Print version information.")
 
 	flag.Parse()
 
+	if flgVersion {
+		fmt.Printf("Build on: %s from branch: %s with sha1: %s\n", buildTime, buildBranch, buildSha1)
+		os.Exit(0)
+	}
 	go func() {
 		http.HandleFunc("/stats", httpStats)
 		var baseURL = "localhost:" + strconv.Itoa(httpPort)
@@ -101,11 +113,13 @@ func main() {
 	for {
 		timeInterval := time.Duration(interval) * time.Second
 
-		tm.Clear()
-		tm.MoveCursor(1, 1)
-		currentTime := time.Now()
-		strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " + strconv.FormatUint(interval, 10) + "s"
-		_, _ = tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
+		if runDaemonized != true {
+			tm.Clear()
+			tm.MoveCursor(1, 1)
+			currentTime := time.Now()
+			strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " + strconv.FormatUint(interval, 10) + "s"
+			_, _ = tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
+		}
 
 		var mapMDTPrevStats = make(map[string]map[string]uint64)
 		var mapMDTNewStats = make(map[string]map[string]uint64)
@@ -230,53 +244,55 @@ func main() {
 				mapOSTCalcStats[ost] = mapCalcCounter
 			}
 		}
-		tm.Flush()
-		fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
-		if len(mapMDTCalcStats) != 0 {
-			fmt.Printf("%15s", "Device")
-			for _, item := range mdtCounters {
-				fmt.Printf("%10s", item)
-			}
-			fmt.Print("\n")
-			for mdt, counters := range mapMDTCalcStats {
-				fmt.Printf("%15s", mdt)
-				for _, counter := range mdtCounters {
-					if v, found := counters[counter]; found {
-						fmt.Printf("%10d", v)
-					} else {
-						fmt.Printf("%10d", 0)
-					}
+		if runDaemonized != true {
+			tm.Flush()
+			fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
+			if len(mapMDTCalcStats) != 0 {
+				fmt.Printf("%15s", "Device")
+				for _, item := range mdtCounters {
+					fmt.Printf("%10s", item)
 				}
 				fmt.Print("\n")
-			}
-		} else {
-			fmt.Println("No MDT stats available.")
-		}
-		fmt.Println()
-		fmt.Println(tm.Bold("OST Operation Stats /s:"))
-		if len(mapOSTCalcStats) != 0 {
-			fmt.Printf("%15s", "Device")
-			for _, item := range ostCounters {
-				fmt.Printf("%13s", item)
-			}
-			fmt.Print("\n")
-			for ost, counters := range mapOSTCalcStats {
-				fmt.Printf("%15s", ost)
-				for _, counter := range ostCounters {
-					if v, found := counters[counter]; found {
-						if strings.Contains(counter, "bytes") {
-							fmt.Printf("%13s", humanize.Bytes(v))
+				for mdt, counters := range mapMDTCalcStats {
+					fmt.Printf("%15s", mdt)
+					for _, counter := range mdtCounters {
+						if v, found := counters[counter]; found {
+							fmt.Printf("%10d", v)
 						} else {
-							fmt.Printf("%13d", v)
+							fmt.Printf("%10d", 0)
 						}
-					} else {
-						fmt.Printf("%13d", 0)
 					}
+					fmt.Print("\n")
+				}
+			} else {
+				fmt.Println("No MDT stats available.")
+			}
+			fmt.Println()
+			fmt.Println(tm.Bold("OST Operation Stats /s:"))
+			if len(mapOSTCalcStats) != 0 {
+				fmt.Printf("%15s", "Device")
+				for _, item := range ostCounters {
+					fmt.Printf("%13s", item)
 				}
 				fmt.Print("\n")
+				for ost, counters := range mapOSTCalcStats {
+					fmt.Printf("%15s", ost)
+					for _, counter := range ostCounters {
+						if v, found := counters[counter]; found {
+							if strings.Contains(counter, "bytes") {
+								fmt.Printf("%13s", humanize.Bytes(v))
+							} else {
+								fmt.Printf("%13d", v)
+							}
+						} else {
+							fmt.Printf("%13d", 0)
+						}
+					}
+					fmt.Print("\n")
+				}
+			} else {
+				fmt.Println("No OST stats available.")
 			}
-		} else {
-			fmt.Println("No OST stats available.")
 		}
 	}
 }
