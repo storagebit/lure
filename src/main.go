@@ -1,3 +1,27 @@
+/*
+MIT License
+
+Copyright (c) 2020 storagebit.ch
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
 package main
 
 import (
@@ -15,22 +39,29 @@ import (
 )
 
 var (
-	interval        int
+	interval int
+
+	pathToMDTs = "/proc/fs/lustre/mdt"
+	pathToOSTs = "/proc/fs/lustre/obdfilter"
+
 	mapMDTCalcStats = make(map[string]map[string]uint64)
 	mapOSTCalcStats = make(map[string]map[string]uint64)
-	pathToMDTs      = "/proc/fs/lustre/mdt"
-	pathToOSTs      = "/proc/fs/lustre/obdfilter"
+	mapMDTJobStats  = make(map[string]map[string]map[string]uint64)
+	mapOSTJobStats  = make(map[string]map[string]map[string]uint64)
 	mapMDTs         = make(map[string]string)
 	mapOSTs         = make(map[string]string)
-	mdtCounters     = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
+
+	mdtCounters = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
 		"setattr", "getxattr", "setxattr", "statfs", "sync", "read_bytes", "write_bytes"}
 	mdtJobStatsCounters = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
 		"setattr", "getxattr", "setxattr", "statfs", "sync", "read_bytes", "write_bytes"}
 	ostCounters = []string{"write_bytes", "read_bytes", "setattr", "statfs", "create", "destroy", "punch", "sync",
 		"get_info", "set_info"}
-	//not used yet	ostJobStatsCounters = []string{"read_bytes", "write_bytes", "getattr", "setattr", "punch", "sync", "destroy",
-	//		"create", "statfs", "get_info", "set_info", "quotactl"}
-	hostname, _    = os.Hostname()
+	ostJobStatsCounters = []string{"read_bytes", "write_bytes", "getattr", "setattr", "punch", "sync", "destroy",
+		"create", "statfs", "get_info", "set_info", "quotactl"}
+
+	hostname, _ = os.Hostname()
+
 	ignoreMDTStats bool
 	ignoreOSTStats bool
 	reportJobStats bool
@@ -85,7 +116,7 @@ func main() {
 	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web browser.")
 	flag.BoolVar(&ignoreMDTStats, "ignoremdt", false, "Don't report MDT stats.")
 	flag.BoolVar(&ignoreOSTStats, "ignoreost", false, "Don't report OST stats.")
-	flag.BoolVar(&reportJobStats, "jobstats", false, "Report Lustre Jobstats. - Metadata Jobstats only. Stay Tuned for OST Jobstats.")
+	flag.BoolVar(&reportJobStats, "jobstats", false, "Report Lustre Jobstats for MDT and OST devices.")
 	flag.BoolVar(&runDaemonized, "daemon", false, "Run as daemon in the background. No console output but stats available via web interface.")
 	flag.BoolVar(&flgVersion, "version", false, "Print version information.")
 
@@ -95,6 +126,7 @@ func main() {
 		fmt.Printf("Build on: %s from branch: %s with sha1: %s\n", buildTime, buildBranch, buildSha1)
 		os.Exit(0)
 	}
+
 	go func() {
 		http.HandleFunc("/stats", httpStats)
 		var baseURL = "localhost:" + strconv.Itoa(httpPort)
@@ -133,12 +165,10 @@ func main() {
 		var mapMDTPrevJobStats = make(map[string]map[string]map[string]uint64)
 		var mapMDTNewJobStats = make(map[string]map[string]map[string]uint64)
 		var mapMDTPrevJobStatsRaw = make(map[string][]byte)
-		//		var mapOSTJobStats = make(map[string]map[string]uint64)
-		//		var mapOSTNewJobStats = make(map[string]map[string]uint64)
-		//		var mapOSTPrevJobStats = make(map[string]map[string]uint64)
+		var mapOSTNewJobStats = make(map[string]map[string]map[string]uint64)
+		var mapOSTPrevJobStats = make(map[string]map[string]map[string]uint64)
 		var mapOSTPrevJobStatsRaw = make(map[string][]byte)
 		var mapOSTNewJobStatsRaw = make(map[string][]byte)
-		var mapMDTJobStats = make(map[string]map[string]map[string]uint64)
 
 		if ignoreMDTStats != true {
 			for key, mdt := range mapMDTs {
@@ -219,7 +249,6 @@ func main() {
 				}
 			}
 		}
-
 		if ignoreMDTStats != true {
 			for mdt, value := range mapMDTPrevStatsRaw {
 				var slcPrevStats = strings.Split(string(value), "\n")
@@ -292,8 +321,9 @@ func main() {
 				mapOSTCalcStats[ost] = mapCalcCounter
 			}
 		}
-
 		if reportJobStats == true {
+
+			// parsing MDT raw jobstats
 			for mdt, value := range mapMDTPrevJobStatsRaw {
 				slcAllJobStats := strings.Split(string(value), "-")
 
@@ -311,7 +341,7 @@ func main() {
 								var fields = strings.Fields(line)
 								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
 
-								if strings.Contains("bytes", fields[0]) {
+								if strings.Contains(fields[0], "bytes") {
 									prevCounters[counter], _ = strconv.ParseUint(fields[11], 10, 64)
 								} else {
 									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
@@ -339,7 +369,7 @@ func main() {
 							if len(line) > 0 {
 								var fields = strings.Fields(line)
 								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
-								if strings.Contains("bytes", fields[0]) {
+								if strings.Contains(fields[0], "bytes") {
 									newCounter[counter], _ = strconv.ParseUint(fields[11], 10, 64)
 								} else {
 									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
@@ -352,7 +382,69 @@ func main() {
 					}
 				}
 			}
+
+			// parsing OST raw jobstats
+			for ost, value := range mapOSTPrevJobStatsRaw {
+				slcAllJobStats := strings.Split(string(value), "-")
+
+				if len(value) <= 11 {
+					continue
+				} else {
+					var mapPrevJobStats = make(map[string]map[string]uint64)
+					for _, item := range slcAllJobStats[1:] {
+						slcJobStats := strings.Split(item, "\n")
+						jobName := strings.Fields(slcJobStats[0])[1]
+						var prevCounters = make(map[string]uint64)
+
+						for _, line := range slcJobStats[2:] {
+							if len(line) > 0 {
+								var fields = strings.Fields(line)
+								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
+
+								if strings.Contains(counter, "bytes") {
+									prevCounters[counter], _ = strconv.ParseUint(fields[11], 10, 64)
+								} else {
+									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
+									prevCounters[counter], _ = strconv.ParseUint(counterValue, 10, 64)
+								}
+								mapPrevJobStats[jobName] = prevCounters
+							}
+							mapOSTPrevJobStats[ost] = mapPrevJobStats
+						}
+					}
+				}
+			}
+			for ost, value := range mapOSTNewJobStatsRaw {
+				slcAllJobStats := strings.Split(string(value), "-")
+				if len(value) <= 11 {
+					continue
+				} else {
+					var mapNewJobStats = make(map[string]map[string]uint64)
+					for _, item := range slcAllJobStats[1:] {
+						slcJobStats := strings.Split(item, "\n")
+						jobName := strings.Fields(slcJobStats[0])[1]
+						var newCounter = make(map[string]uint64)
+
+						for _, line := range slcJobStats[2:] {
+							if len(line) > 0 {
+								var fields = strings.Fields(line)
+								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
+								if strings.Contains(counter, "bytes") {
+									newCounter[counter], _ = strconv.ParseUint(fields[11], 10, 64)
+								} else {
+									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
+									newCounter[counter], _ = strconv.ParseUint(counterValue, 10, 64)
+								}
+								mapNewJobStats[jobName] = newCounter
+							}
+							mapOSTNewJobStats[ost] = mapNewJobStats
+						}
+					}
+				}
+			}
 		}
+
+		// calculating the MDT jobstats
 		for mdt, jobs := range mapMDTNewJobStats {
 			var mapMDTJobs = make(map[string]map[string]uint64)
 			for job, counters := range jobs {
@@ -368,6 +460,24 @@ func main() {
 				mapMDTJobs[job] = mapCalcCounter
 			}
 			mapMDTJobStats[mdt] = mapMDTJobs
+		}
+
+		// calculating the OST jobstats
+		for ost, jobs := range mapOSTNewJobStats {
+			var mapOSTJobs = make(map[string]map[string]uint64)
+			for job, counters := range jobs {
+				var mapCalcCounter = make(map[string]uint64)
+
+				for key := range counters {
+					var prevCounter = mapOSTPrevJobStats[ost][job][key]
+					var newCounter = mapOSTNewJobStats[ost][job][key]
+					var calcCounter uint64
+					calcCounter = (newCounter - prevCounter) / uint64(interval)
+					mapCalcCounter[key] = calcCounter
+				}
+				mapOSTJobs[job] = mapCalcCounter
+			}
+			mapOSTJobStats[ost] = mapOSTJobs
 		}
 
 		if runDaemonized != true {
@@ -448,9 +558,39 @@ func main() {
 			} else {
 				fmt.Println("No MDT Jobstats available.")
 			}
+			fmt.Println()
+			fmt.Println(tm.Bold("OST Jobstats /s:"))
+			if len(mapOSTJobStats) != 0 {
+				fmt.Printf("%20s", "Job @ Device")
+				for _, item := range ostJobStatsCounters {
+					fmt.Printf("%13s", item)
+				}
+				fmt.Print("\n")
+
+				for ost, jobs := range mapOSTJobStats {
+					for job, counters := range jobs {
+						fmt.Printf("%20s", job+"@"+strings.Split(ost, "-")[1])
+						for _, counter := range ostJobStatsCounters {
+							if v, found := counters[counter]; found {
+								if strings.Contains(counter, "bytes") {
+									fmt.Printf("%13s", humanize.Bytes(v))
+								} else {
+									fmt.Printf("%13d", v)
+								}
+							} else {
+								fmt.Printf("%13d", 0)
+							}
+						}
+						fmt.Print("\n")
+					}
+				}
+			} else {
+				fmt.Println("No OST Jobstats available.")
+			}
 		}
 	}
 }
+
 func httpStats(w http.ResponseWriter, _ *http.Request) {
 	currentTime := time.Now()
 	strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " +
@@ -473,14 +613,14 @@ func httpStats(w http.ResponseWriter, _ *http.Request) {
 		}
 		_, _ = fmt.Fprint(w, "\n")
 	}
-	_, _ = fmt.Fprintln(w, "OST Operation Stats /s:")
+	_, _ = fmt.Fprintln(w, "\nOST Operation Stats /s:")
 	_, _ = fmt.Fprintf(w, "%20s", "Device")
 	for _, item := range ostCounters {
 		_, _ = fmt.Fprintf(w, "%13s", item)
 	}
 	_, _ = fmt.Fprint(w, "\n")
 	for ost, counters := range mapOSTCalcStats {
-		_, _ = fmt.Fprintf(w, "%15s", ost)
+		_, _ = fmt.Fprintf(w, "%20s", ost)
 		for _, counter := range ostCounters {
 			if v, found := counters[counter]; found {
 				if strings.Contains(counter, "bytes") {
@@ -493,5 +633,61 @@ func httpStats(w http.ResponseWriter, _ *http.Request) {
 			}
 		}
 		_, _ = fmt.Fprint(w, "\n")
+	}
+	_, _ = fmt.Fprint(w, "\n")
+
+	_, _ = fmt.Fprint(w, "MDT Jobstats /s:")
+	_, _ = fmt.Fprint(w, "\n")
+	if len(mapMDTJobStats) != 0 {
+		_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
+		for _, item := range mdtJobStatsCounters {
+			_, _ = fmt.Fprintf(w, "%13s", item)
+		}
+		_, _ = fmt.Fprint(w, "\n")
+		for mdt, jobs := range mapMDTJobStats {
+			for job, counters := range jobs {
+				_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(mdt, "-")[1])
+				for _, counter := range mdtJobStatsCounters {
+					if v, found := counters[counter]; found {
+						if strings.Contains(counter, "bytes") {
+							_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+						} else {
+							_, _ = fmt.Fprintf(w, "%13d", v)
+						}
+					} else {
+						_, _ = fmt.Fprintf(w, "%13d", 0)
+					}
+				}
+				_, _ = fmt.Fprint(w, "\n")
+			}
+		}
+	} else {
+		_, _ = fmt.Fprint(w, "\nNo MDT Jobstats available.")
+	}
+	if len(mapOSTJobStats) != 0 {
+		_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
+		for _, item := range ostJobStatsCounters {
+			_, _ = fmt.Fprintf(w, "%13s", item)
+		}
+		_, _ = fmt.Fprint(w, "\n")
+		for ost, jobs := range mapOSTJobStats {
+			for job, counters := range jobs {
+				_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(ost, "-")[1])
+				for _, counter := range mdtJobStatsCounters {
+					if v, found := counters[counter]; found {
+						if strings.Contains(counter, "bytes") {
+							_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+						} else {
+							_, _ = fmt.Fprintf(w, "%13d", v)
+						}
+					} else {
+						_, _ = fmt.Fprintf(w, "%13d", 0)
+					}
+				}
+				_, _ = fmt.Fprint(w, "\n")
+			}
+		}
+	} else {
+		_, _ = fmt.Fprint(w, "\nNo OST Jobstats available.")
 	}
 }
