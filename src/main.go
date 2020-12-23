@@ -33,6 +33,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,11 @@ var (
 	mapOSTJobStats  = make(map[string]map[string]map[string]uint64)
 	mapMDTs         = make(map[string]string)
 	mapOSTs         = make(map[string]string)
+
+	sortedMTDDevices []string
+	sortedOSTDevices []string
+	sortedMDTJobs    []string
+	sortedOSTJobs    []string
 
 	mdtCounters = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
 		"setattr", "getxattr", "setxattr", "statfs", "sync", "read_bytes", "write_bytes"}
@@ -108,6 +114,219 @@ func getOSTs() {
 	}
 }
 
+func readStatsFile(mapDevices map[string]string) map[string][]byte {
+
+	var mapStatsRaw = make(map[string][]byte)
+
+	for key, device := range mapDevices {
+		rawStats, err := ioutil.ReadFile(device)
+		if err != nil {
+			log.Printf("ERROR: %v", err)
+		} else {
+			mapStatsRaw[key] = rawStats
+		}
+	}
+	return mapStatsRaw
+}
+
+func readJobStatsFile(mapDevices map[string]string, deviceType string) map[string][]byte {
+
+	var mapStatsRaw = make(map[string][]byte)
+
+	for key := range mapDevices {
+		rawStats, err := ioutil.ReadFile("/proc/fs/lustre/" + deviceType + "/" + key + "/job_stats")
+		if err != nil {
+			log.Printf("ERROR: %v", err)
+		} else {
+			mapStatsRaw[key] = rawStats
+		}
+	}
+	return mapStatsRaw
+}
+
+func parseRAWSats(mapRAWStats map[string][]byte) map[string]map[string]uint64 {
+
+	var mapStats = make(map[string]map[string]uint64)
+
+	for device, value := range mapRAWStats {
+		var slcStats = strings.Split(string(value), "\n")
+		slcStats = slcStats[1 : len(slcStats)-1]
+		var mapCounters = make(map[string]uint64)
+
+		for _, item := range slcStats {
+			var fields = strings.Fields(item)
+			if strings.Contains(fields[0], "bytes") {
+				mapCounters[fields[0]], _ = strconv.ParseUint(fields[6], 10, 64)
+			} else {
+				mapCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
+			}
+			mapStats[device] = mapCounters
+		}
+	}
+	return mapStats
+}
+
+func calcStats(mapPrevStats map[string]map[string]uint64, mapNewStats map[string]map[string]uint64) map[string]map[string]uint64 {
+
+	var mapStats = make(map[string]map[string]uint64)
+
+	for device, value := range mapPrevStats {
+		var mapCounter = make(map[string]uint64)
+		for key := range value {
+			var calcCounter = (mapNewStats[device][key] - mapPrevStats[device][key]) / uint64(interval)
+			mapCounter[key] = calcCounter
+		}
+		mapStats[device] = mapCounter
+	}
+	return mapStats
+}
+
+func parseRAWJobStats(mapRAWJobStats map[string][]byte) map[string]map[string]map[string]uint64 {
+
+	var mapJobStats = make(map[string]map[string]map[string]uint64)
+
+	for device, value := range mapRAWJobStats {
+		slcAllJobStats := strings.Split(string(value), "-")
+		if len(value) <= 11 {
+			continue
+		} else {
+			var mapStats = make(map[string]map[string]uint64)
+			for _, item := range slcAllJobStats[1:] {
+				slcJobStats := strings.Split(item, "\n")
+				jobName := strings.Fields(slcJobStats[0])[1]
+				var mapCounters = make(map[string]uint64)
+
+				for _, line := range slcJobStats[2:] {
+					if len(line) > 0 {
+						var fields = strings.Fields(line)
+						var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
+
+						if strings.Contains(fields[0], "bytes") {
+							mapCounters[counter], _ = strconv.ParseUint(fields[11], 10, 64)
+						} else {
+							var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
+							mapCounters[counter], _ = strconv.ParseUint(counterValue, 10, 64)
+						}
+						mapStats[jobName] = mapCounters
+					}
+					mapJobStats[device] = mapStats
+				}
+			}
+		}
+	}
+	return mapJobStats
+}
+
+func calcJobStats(mapPrevJobStats map[string]map[string]map[string]uint64, mapNewJobStats map[string]map[string]map[string]uint64) map[string]map[string]map[string]uint64 {
+
+	var mapJobStats = make(map[string]map[string]map[string]uint64)
+
+	for device, jobs := range mapPrevJobStats {
+		var mapJobs = make(map[string]map[string]uint64)
+
+		for job, counters := range jobs {
+			var mapCounter = make(map[string]uint64)
+
+			for key := range counters {
+				var counter uint64
+				counter = (mapNewJobStats[device][job][key] - mapPrevJobStats[device][job][key]) / uint64(interval)
+				mapCounter[key] = counter
+			}
+			mapJobs[job] = mapCounter
+		}
+		mapJobStats[device] = mapJobs
+	}
+	return mapJobStats
+}
+
+func sortStatsMapIntoSlice(mapToSort map[string]map[string]uint64) []string {
+
+	devices := make([]string, len(mapToSort))
+	i := 0
+	for device := range mapToSort {
+		devices[i] = device
+		i++
+	}
+	sort.Strings(devices)
+	return devices
+}
+
+func sortJobsMapIntoSlice(mapToSort map[string]map[string]map[string]uint64) []string {
+	var slcSortedDeviceJobs []string
+	var slcDevices []string
+
+	for device := range mapToSort {
+		slcDevices = append(slcDevices, device)
+	}
+	sort.Strings(slcDevices)
+
+	for _, device := range slcDevices {
+		var slcJobs []string
+
+		for job := range mapToSort[device] {
+			slcJobs = append(slcJobs, job)
+		}
+		sort.Strings(slcJobs)
+
+		for _, job := range slcJobs {
+			slcSortedDeviceJobs = append(slcSortedDeviceJobs, device+"@@"+job)
+		}
+	}
+	return slcSortedDeviceJobs
+}
+
+func printStats(mapStats map[string]map[string]uint64, slcDevices []string, slcCounters []string) {
+	fmt.Printf("%20s", "Device")
+
+	for _, item := range slcCounters {
+		fmt.Printf("%13s", item)
+	}
+	fmt.Print("\n")
+	for _, device := range slcDevices {
+		fmt.Printf("%20s", device)
+		for _, counter := range slcCounters {
+			if v, found := mapStats[device][counter]; found {
+				if strings.Contains(counter, "bytes") {
+					fmt.Printf("%13s", humanize.Bytes(v))
+				} else {
+					fmt.Printf("%13d", v)
+				}
+			} else {
+				fmt.Printf("%13d", 0)
+			}
+		}
+		fmt.Print("\n")
+	}
+}
+
+func printJobStats(mapJobStats map[string]map[string]map[string]uint64, slcJobs []string, slcCounters []string) {
+
+	fmt.Printf("%20s", "Job @ Device")
+
+	for _, item := range slcCounters {
+		fmt.Printf("%13s", item)
+	}
+	fmt.Print("\n")
+
+	for _, jobHash := range slcJobs {
+		var device = strings.Split(jobHash, "@@")[0]
+		var job = strings.Split(jobHash, "@@")[1]
+		fmt.Printf("%20s", job+"@"+strings.Split(device, "-")[1])
+		for _, counter := range slcCounters {
+			if v, found := mapJobStats[device][job][counter]; found {
+				if strings.Contains(counter, "bytes") {
+					fmt.Printf("%13s", humanize.Bytes(v))
+				} else {
+					fmt.Printf("%13d", v)
+				}
+			} else {
+				fmt.Printf("%13d", 0)
+			}
+		}
+		fmt.Print("\n")
+	}
+}
+
 func main() {
 
 	var httpPort int
@@ -115,7 +334,7 @@ func main() {
 	flag.IntVar(&interval, "interval", 1, "Sample interval in seconds")
 	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web browser.")
 	flag.BoolVar(&ignoreMDTStats, "ignoremdt", false, "Don't report MDT stats.")
-	flag.BoolVar(&ignoreOSTStats, "ignoreost", false, "Don't report OST stats.")
+	flag.BoolVar(&ignoreOSTStats, "ignore", false, "Don't report OST stats.")
 	flag.BoolVar(&reportJobStats, "jobstats", false, "Report Lustre Jobstats for MDT and OST devices.")
 	flag.BoolVar(&runDaemonized, "daemon", false, "Run as daemon in the background. No console output but stats available via web interface.")
 	flag.BoolVar(&flgVersion, "version", false, "Print version information.")
@@ -171,419 +390,83 @@ func main() {
 		var mapOSTNewJobStatsRaw = make(map[string][]byte)
 
 		if ignoreMDTStats != true {
-			for key, mdt := range mapMDTs {
-				prevSample, err := ioutil.ReadFile(mdt)
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapMDTPrevStatsRaw[key] = prevSample
-				}
-			}
+			mapMDTPrevStatsRaw = readStatsFile(mapMDTs)
 		}
 		if ignoreOSTStats != true {
-			for key, ost := range mapOSTs {
-				prevSample, err := ioutil.ReadFile(ost)
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapOSTPrevStatsRaw[key] = prevSample
-				}
-			}
+			mapOSTPrevStatsRaw = readStatsFile(mapOSTs)
 		}
 		if reportJobStats == true {
-			for mdt := range mapMDTs {
-				prevSample, err := ioutil.ReadFile("/proc/fs/lustre/mdt/" + mdt + "/job_stats")
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapMDTPrevJobStatsRaw[mdt] = prevSample
-				}
-			}
-			for ost := range mapOSTs {
-				prevSample, err := ioutil.ReadFile("/proc/fs/lustre/obdfilter/" + ost + "/job_stats")
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapOSTPrevJobStatsRaw[ost] = prevSample
-				}
-			}
+			mapMDTPrevJobStatsRaw = readJobStatsFile(mapMDTs, "mdt")
+			mapOSTPrevJobStatsRaw = readJobStatsFile(mapOSTs, "obdfilter")
 		}
 
 		time.Sleep(timeInterval)
 
 		if ignoreMDTStats != true {
-			for key, mdt := range mapMDTs {
-				newSample, err := ioutil.ReadFile(mdt)
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapMDTNewStatsRaw[key] = newSample
-				}
-			}
+			mapMDTNewStatsRaw = readStatsFile(mapMDTs)
 		}
 		if ignoreOSTStats != true {
-			for key, ost := range mapOSTs {
-				newSample, err := ioutil.ReadFile(ost)
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapOSTNewStatsRaw[key] = newSample
-				}
-			}
+			mapOSTNewStatsRaw = readStatsFile(mapOSTs)
 		}
 		if reportJobStats == true {
-			for mdt := range mapMDTs {
-				newSample, err := ioutil.ReadFile("/proc/fs/lustre/mdt/" + mdt + "/job_stats")
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapMDTNewJobStatsRaw[mdt] = newSample
-				}
-			}
-			for ost := range mapOSTs {
-				newSample, err := ioutil.ReadFile("/proc/fs/lustre/obdfilter/" + ost + "/job_stats")
-				if err != nil {
-					log.Printf("ERROR: %v", err)
-				} else {
-					mapOSTNewJobStatsRaw[ost] = newSample
-				}
-			}
+			mapMDTNewJobStatsRaw = readJobStatsFile(mapMDTs, "mdt")
+			mapOSTNewJobStatsRaw = readJobStatsFile(mapOSTs, "obdfilter")
 		}
+
 		if ignoreMDTStats != true {
-			for mdt, value := range mapMDTPrevStatsRaw {
-				var slcPrevStats = strings.Split(string(value), "\n")
-				slcPrevStats = slcPrevStats[1 : len(slcPrevStats)-1]
-				var prevCounters = make(map[string]uint64)
-
-				for _, item := range slcPrevStats {
-					var fields = strings.Fields(item)
-					prevCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
-					mapMDTPrevStats[mdt] = prevCounters
-				}
-			}
-			for mdt, value := range mapMDTNewStatsRaw {
-				var slcNewStats = strings.Split(string(value), "\n")
-				slcNewStats = slcNewStats[1 : len(slcNewStats)-1]
-				var newCounters = make(map[string]uint64)
-
-				for _, item := range slcNewStats {
-					var fields = strings.Fields(item)
-					newCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
-					mapMDTNewStats[mdt] = newCounters
-				}
-			}
-			for mdt, value := range mapMDTPrevStats {
-				var mapCalcCounter = make(map[string]uint64)
-				for key := range value {
-					var calcCounter = (mapMDTNewStats[mdt][key] - mapMDTPrevStats[mdt][key]) / uint64(interval)
-					mapCalcCounter[key] = calcCounter
-				}
-				mapMDTCalcStats[mdt] = mapCalcCounter
-			}
+			mapMDTPrevStats = parseRAWSats(mapMDTPrevStatsRaw)
+			mapMDTNewStats = parseRAWSats(mapMDTNewStatsRaw)
+			mapMDTCalcStats = calcStats(mapMDTPrevStats, mapMDTNewStats)
 		}
 		if ignoreOSTStats != true {
-			for ost, value := range mapOSTPrevStatsRaw {
-				var slcPrevStats = strings.Split(string(value), "\n")
-				slcPrevStats = slcPrevStats[1 : len(slcPrevStats)-1]
-				var prevCounters = make(map[string]uint64)
-
-				for _, item := range slcPrevStats {
-					var fields = strings.Fields(item)
-					if strings.Contains(fields[0], "bytes") {
-						prevCounters[fields[0]], _ = strconv.ParseUint(fields[6], 10, 64)
-					} else {
-						prevCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
-					}
-					mapOSTPrevStats[ost] = prevCounters
-				}
-			}
-			for ost, value := range mapOSTNewStatsRaw {
-				var slcNewStats = strings.Split(string(value), "\n")
-				slcNewStats = slcNewStats[1 : len(slcNewStats)-1]
-				var newCounters = make(map[string]uint64)
-
-				for _, item := range slcNewStats {
-					var fields = strings.Fields(item)
-					if strings.Contains(fields[0], "bytes") {
-						newCounters[fields[0]], _ = strconv.ParseUint(fields[6], 10, 64)
-					} else {
-						newCounters[fields[0]], _ = strconv.ParseUint(fields[1], 10, 64)
-					}
-					mapOSTNewStats[ost] = newCounters
-				}
-			}
-			for ost, value := range mapOSTPrevStats {
-				var mapCalcCounter = make(map[string]uint64)
-				for key := range value {
-					var calcCounter = (mapOSTNewStats[ost][key] - mapOSTPrevStats[ost][key]) / uint64(interval)
-					mapCalcCounter[key] = calcCounter
-				}
-				mapOSTCalcStats[ost] = mapCalcCounter
-			}
+			mapOSTPrevStats = parseRAWSats(mapOSTPrevStatsRaw)
+			mapOSTNewStats = parseRAWSats(mapOSTNewStatsRaw)
+			mapOSTCalcStats = calcStats(mapOSTPrevStats, mapOSTNewStats)
 		}
+
 		if reportJobStats == true {
-
-			// parsing MDT raw jobstats
-			for mdt, value := range mapMDTPrevJobStatsRaw {
-				slcAllJobStats := strings.Split(string(value), "-")
-
-				if len(value) <= 11 {
-					continue
-				} else {
-					var mapPrevJobStats = make(map[string]map[string]uint64)
-					for _, item := range slcAllJobStats[1:] {
-						slcJobStats := strings.Split(item, "\n")
-						jobName := strings.Fields(slcJobStats[0])[1]
-						var prevCounters = make(map[string]uint64)
-
-						for _, line := range slcJobStats[2:] {
-							if len(line) > 0 {
-								var fields = strings.Fields(line)
-								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
-
-								if strings.Contains(fields[0], "bytes") {
-									prevCounters[counter], _ = strconv.ParseUint(fields[11], 10, 64)
-								} else {
-									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
-									prevCounters[counter], _ = strconv.ParseUint(counterValue, 10, 64)
-								}
-								mapPrevJobStats[jobName] = prevCounters
-							}
-							mapMDTPrevJobStats[mdt] = mapPrevJobStats
-						}
-					}
-				}
-			}
-			for mdt, value := range mapMDTNewJobStatsRaw {
-				slcAllJobStats := strings.Split(string(value), "-")
-				if len(value) <= 11 {
-					continue
-				} else {
-					var mapNewJobStats = make(map[string]map[string]uint64)
-					for _, item := range slcAllJobStats[1:] {
-						slcJobStats := strings.Split(item, "\n")
-						jobName := strings.Fields(slcJobStats[0])[1]
-						var newCounter = make(map[string]uint64)
-
-						for _, line := range slcJobStats[2:] {
-							if len(line) > 0 {
-								var fields = strings.Fields(line)
-								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
-								if strings.Contains(fields[0], "bytes") {
-									newCounter[counter], _ = strconv.ParseUint(fields[11], 10, 64)
-								} else {
-									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
-									newCounter[counter], _ = strconv.ParseUint(counterValue, 10, 64)
-								}
-								mapNewJobStats[jobName] = newCounter
-							}
-							mapMDTNewJobStats[mdt] = mapNewJobStats
-						}
-					}
-				}
-			}
-
-			// parsing OST raw jobstats
-			for ost, value := range mapOSTPrevJobStatsRaw {
-				slcAllJobStats := strings.Split(string(value), "-")
-
-				if len(value) <= 11 {
-					continue
-				} else {
-					var mapPrevJobStats = make(map[string]map[string]uint64)
-					for _, item := range slcAllJobStats[1:] {
-						slcJobStats := strings.Split(item, "\n")
-						jobName := strings.Fields(slcJobStats[0])[1]
-						var prevCounters = make(map[string]uint64)
-
-						for _, line := range slcJobStats[2:] {
-							if len(line) > 0 {
-								var fields = strings.Fields(line)
-								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
-
-								if strings.Contains(counter, "bytes") {
-									prevCounters[counter], _ = strconv.ParseUint(fields[11], 10, 64)
-								} else {
-									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
-									prevCounters[counter], _ = strconv.ParseUint(counterValue, 10, 64)
-								}
-								mapPrevJobStats[jobName] = prevCounters
-							}
-							mapOSTPrevJobStats[ost] = mapPrevJobStats
-						}
-					}
-				}
-			}
-			for ost, value := range mapOSTNewJobStatsRaw {
-				slcAllJobStats := strings.Split(string(value), "-")
-				if len(value) <= 11 {
-					continue
-				} else {
-					var mapNewJobStats = make(map[string]map[string]uint64)
-					for _, item := range slcAllJobStats[1:] {
-						slcJobStats := strings.Split(item, "\n")
-						jobName := strings.Fields(slcJobStats[0])[1]
-						var newCounter = make(map[string]uint64)
-
-						for _, line := range slcJobStats[2:] {
-							if len(line) > 0 {
-								var fields = strings.Fields(line)
-								var counter = strings.TrimSuffix(strings.Fields(line)[0], ":")
-								if strings.Contains(counter, "bytes") {
-									newCounter[counter], _ = strconv.ParseUint(fields[11], 10, 64)
-								} else {
-									var counterValue = strings.TrimSuffix(strings.Fields(line)[3], ",")
-									newCounter[counter], _ = strconv.ParseUint(counterValue, 10, 64)
-								}
-								mapNewJobStats[jobName] = newCounter
-							}
-							mapOSTNewJobStats[ost] = mapNewJobStats
-						}
-					}
-				}
-			}
+			mapMDTPrevJobStats = parseRAWJobStats(mapMDTPrevJobStatsRaw)
+			mapMDTNewJobStats = parseRAWJobStats(mapMDTNewJobStatsRaw)
+			mapOSTPrevJobStats = parseRAWJobStats(mapOSTPrevJobStatsRaw)
+			mapOSTNewJobStats = parseRAWJobStats(mapOSTNewJobStatsRaw)
+			mapMDTJobStats = calcJobStats(mapMDTPrevJobStats, mapMDTNewJobStats)
+			mapOSTJobStats = calcJobStats(mapOSTPrevJobStats, mapOSTNewJobStats)
+			sortedMDTJobs = sortJobsMapIntoSlice(mapMDTJobStats)
+			sortedOSTJobs = sortJobsMapIntoSlice(mapOSTJobStats)
 		}
 
-		// calculating the MDT jobstats
-		for mdt, jobs := range mapMDTNewJobStats {
-			var mapMDTJobs = make(map[string]map[string]uint64)
-			for job, counters := range jobs {
-				var mapCalcCounter = make(map[string]uint64)
-
-				for key := range counters {
-					var prevCounter = mapMDTPrevJobStats[mdt][job][key]
-					var newCounter = mapMDTNewJobStats[mdt][job][key]
-					var calcCounter uint64
-					calcCounter = (newCounter - prevCounter) / uint64(interval)
-					mapCalcCounter[key] = calcCounter
-				}
-				mapMDTJobs[job] = mapCalcCounter
-			}
-			mapMDTJobStats[mdt] = mapMDTJobs
-		}
-
-		// calculating the OST jobstats
-		for ost, jobs := range mapOSTNewJobStats {
-			var mapOSTJobs = make(map[string]map[string]uint64)
-			for job, counters := range jobs {
-				var mapCalcCounter = make(map[string]uint64)
-
-				for key := range counters {
-					var prevCounter = mapOSTPrevJobStats[ost][job][key]
-					var newCounter = mapOSTNewJobStats[ost][job][key]
-					var calcCounter uint64
-					calcCounter = (newCounter - prevCounter) / uint64(interval)
-					mapCalcCounter[key] = calcCounter
-				}
-				mapOSTJobs[job] = mapCalcCounter
-			}
-			mapOSTJobStats[ost] = mapOSTJobs
-		}
+		sortedMTDDevices = sortStatsMapIntoSlice(mapMDTCalcStats)
+		sortedOSTDevices = sortStatsMapIntoSlice(mapOSTCalcStats)
 
 		if runDaemonized != true {
+
 			tm.Flush()
 			fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
 			if len(mapMDTCalcStats) != 0 {
-				fmt.Printf("%20s", "Device")
-				for _, item := range mdtCounters {
-					fmt.Printf("%13s", item)
-				}
-				fmt.Print("\n")
-				for mdt, counters := range mapMDTCalcStats {
-					fmt.Printf("%20s", mdt)
-					for _, counter := range mdtCounters {
-						if v, found := counters[counter]; found {
-							fmt.Printf("%13d", v)
-						} else {
-							fmt.Printf("%13d", 0)
-						}
-					}
-					fmt.Print("\n")
-				}
+				printStats(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
 			} else {
 				fmt.Println("No MDT stats available.")
 			}
 			fmt.Println()
 			fmt.Println(tm.Bold("OST Operation Stats /s:"))
 			if len(mapOSTCalcStats) != 0 {
-				fmt.Printf("%20s", "Device")
-				for _, item := range ostCounters {
-					fmt.Printf("%13s", item)
-				}
-				fmt.Print("\n")
-				for ost, counters := range mapOSTCalcStats {
-					fmt.Printf("%20s", ost)
-					for _, counter := range ostCounters {
-						if v, found := counters[counter]; found {
-							if strings.Contains(counter, "bytes") {
-								fmt.Printf("%13s", humanize.Bytes(v))
-							} else {
-								fmt.Printf("%13d", v)
-							}
-						} else {
-							fmt.Printf("%13d", 0)
-						}
-					}
-					fmt.Print("\n")
-				}
+				printStats(mapOSTCalcStats, sortedOSTDevices, ostCounters)
 			} else {
 				fmt.Println("No OST stats available.")
 			}
 			fmt.Println()
 			fmt.Println(tm.Bold("MDT Jobstats /s:"))
 			if len(mapMDTJobStats) != 0 {
-				fmt.Printf("%20s", "Job @ Device")
-				for _, item := range mdtJobStatsCounters {
-					fmt.Printf("%13s", item)
-				}
-				fmt.Print("\n")
+				printJobStats(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
 
-				for mdt, jobs := range mapMDTJobStats {
-					for job, counters := range jobs {
-						fmt.Printf("%20s", job+"@"+strings.Split(mdt, "-")[1])
-						for _, counter := range mdtJobStatsCounters {
-							if v, found := counters[counter]; found {
-								if strings.Contains(counter, "bytes") {
-									fmt.Printf("%13s", humanize.Bytes(v))
-								} else {
-									fmt.Printf("%13d", v)
-								}
-							} else {
-								fmt.Printf("%13d", 0)
-							}
-						}
-						fmt.Print("\n")
-					}
-				}
 			} else {
 				fmt.Println("No MDT Jobstats available.")
 			}
 			fmt.Println()
 			fmt.Println(tm.Bold("OST Jobstats /s:"))
 			if len(mapOSTJobStats) != 0 {
-				fmt.Printf("%20s", "Job @ Device")
-				for _, item := range ostJobStatsCounters {
-					fmt.Printf("%13s", item)
-				}
-				fmt.Print("\n")
+				printJobStats(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
 
-				for ost, jobs := range mapOSTJobStats {
-					for job, counters := range jobs {
-						fmt.Printf("%20s", job+"@"+strings.Split(ost, "-")[1])
-						for _, counter := range ostJobStatsCounters {
-							if v, found := counters[counter]; found {
-								if strings.Contains(counter, "bytes") {
-									fmt.Printf("%13s", humanize.Bytes(v))
-								} else {
-									fmt.Printf("%13d", v)
-								}
-							} else {
-								fmt.Printf("%13d", 0)
-							}
-						}
-						fmt.Print("\n")
-					}
-				}
 			} else {
 				fmt.Println("No OST Jobstats available.")
 			}
