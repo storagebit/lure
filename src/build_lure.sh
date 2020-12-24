@@ -26,10 +26,13 @@
 # Easy test is running 'go version' - if that works you should be good.
 
 # First, lets get the build dependencies installed
+echo -e "Checking if github.com/buger/goterm package is available and installing it if necessary."
 go get -v github.com/buger/goterm
+echo -e "Checking if the github.com/dustin/go-humanize package is available and installing it if necessary."
 go get -v github.com/dustin/go-humanize
 
-# build the executable
-go build -o ../bin/lure -ldflags "-X main.buildSha1=`git rev-parse HEAD`  \
-                                  -X main.buildBranch=`git rev-parse --abbrev-ref HEAD` \
-                                  -X main.buildTime=`date +'%Y-%m-%d_%T'`"
+# Build the executable
+echo -e "Compiling the binary/executable"
+go build -x -o ../bin/lure -ldflags "-X main.buildSha1=$(git rev-parse HEAD)  \
+                                  -X main.buildBranch=$(git rev-parse --abbrev-ref HEAD) \
+                                  -X main.buildTime=$(date +'%Y-%m-%d_%T')"

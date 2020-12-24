@@ -6,9 +6,8 @@ lure is a tool allowing you to monitor lustre components statistics and status i
 
 It also provides the stats available via web browser interface.
 
-## Whats new in this version?
-- better support for daemonized operations
-- reporting MDT and OST jobstats
+## What's new in this version?
+- reporting the stats in JSON format via HTTP Get. RESTish I guess... 
 
 ## Note
 For ldiskfs based lustre systems only. No plans and no desire to support ZFS specific stuff.
@@ -26,15 +25,16 @@ I'll also add more code documentation as I work on it and time allows.
 - Report OST throughput statistics
 - Report OST jobstats
 
-### Web interface
+### Web/JSON interface
 - Report MDT and OST performance statistics, incl. jobstats
+- All stats can be pulled via HTTP Get. Details further down
 
 ## Stuff I'm working on for the next release
-- clean up and streamline some code and evaluate if more parallelization is required
-- add capacity and inode ldiskfs consumption reporting
+- Continuous code clean up 
+- Add capacity and inode ldiskfs consumption reporting
 
 ## A bit further out
-- export stats via http in JSON format(lower priority than jobstats)
+- Feed stats directly into InfluxDB
 
 ## Installation
 Quite simple actually. 
@@ -67,7 +67,7 @@ Usage of ./lure:
 ```
 To access the stats via web browser use: `http://<ip address>:<port number>/stats` as the URL
 
-If you want to web access only, run lure in a fashion similar to: `nohup ./lure /dev/null 2>&1 &` - The upcoming functionality allowing it to run demonized in the background will make this obsolete.
+If you want to web access only, run lure in a fashion similar to: `nohup ./lure /dev/null 2>&1 &` Or you can also write a systemd unit file and run it as a lightweight daemon or service. That's how I run it.
 
 ## Sample command line output(web will look very similar)
 ```
@@ -81,3 +81,12 @@ OST Operation Stats /s:
   testfs-OST0001            0            0            0            2            0            0            0            0            0            0
   testfs-OST0000            0            0            0            2            0            0            0            0            0            0
 ```
+## Stats in JSON format via HTTP Get
+- MDT stats via HTTP Get at `http://<ip address>:<port number>/json?stats=mdt`
+- OST stats via HTTP Get at `http://<ip address>:<port number>/json?stats=ost`
+- MDT Jobstats via HTTP Get at `http://<ip address>:<port number>/json?stats=mdtjob`
+- OST Jobstats via HTTP Get at `http://<ip address>:<port number>/json?stats=ostjob`
+
+Returns HTTP status 204 if there is no data to display, HTTP status 500 if there is an internal error, or HTTP status 400 if the request/URL was incorrect.
+
+## Happy Lustre Monitoring!

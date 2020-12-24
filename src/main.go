@@ -25,6 +25,7 @@ SOFTWARE.
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	tm "github.com/buger/goterm"
@@ -348,6 +349,7 @@ func main() {
 
 	go func() {
 		http.HandleFunc("/stats", httpStats)
+		http.HandleFunc("/json", jsonStats)
 		var baseURL = "localhost:" + strconv.Itoa(httpPort)
 		err := http.ListenAndServe(baseURL, nil)
 		checkContinue(err)
@@ -572,5 +574,47 @@ func httpStats(w http.ResponseWriter, _ *http.Request) {
 		}
 	} else {
 		_, _ = fmt.Fprint(w, "\nNo OST Jobstats available.")
+	}
+}
+
+func jsonStats(w http.ResponseWriter, r *http.Request) {
+
+	keys := r.URL.Query()
+	urlRequest := keys.Get("stats") //Get return empty string if key not found
+
+	if len(urlRequest) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		switch urlRequest {
+		case "mdt":
+			if len(mapMDTCalcStats) > 0 {
+				jsonData, _ := json.Marshal(mapMDTCalcStats)
+				_, _ = w.Write(jsonData)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case "ost":
+			if len(mapOSTCalcStats) > 0 {
+				jsonData, _ := json.Marshal(mapOSTCalcStats)
+				_, _ = w.Write(jsonData)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case "mdtjob":
+			if len(mapMDTJobStats) > 0 {
+				jsonData, _ := json.Marshal(mapMDTJobStats)
+				_, _ = w.Write(jsonData)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case "ostjob":
+			if len(mapOSTJobStats) > 0 {
+				jsonData, _ := json.Marshal(mapOSTJobStats)
+				_, _ = w.Write(jsonData)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		}
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
 	}
 }
