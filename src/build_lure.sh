@@ -26,10 +26,12 @@
 # Easy test is running 'go version' - if that works you should be good.
 
 # First, lets get the build dependencies installed
-echo -e "Checking if github.com/buger/goterm package is available and installing it if necessary."
+echo -e "Checking if github.com/buger/goterm source package is available and installing it if necessary."
 go get -v github.com/buger/goterm
-echo -e "Checking if the github.com/dustin/go-humanize package is available and installing it if necessary."
+echo -e "Checking if the github.com/dustin/go-humanize source package is available and installing it if necessary."
 go get -v github.com/dustin/go-humanize
+echo -e "Checking if the InfluxDB source package is available and installing it if necessary "
+go get -v github.com/influxdata/influxdb-client-go
 
 # Build the executable
 echo -e "Compiling the binary/executable"

@@ -30,6 +30,7 @@ import (
 	"fmt"
 	tm "github.com/buger/goterm"
 	"github.com/dustin/go-humanize"
+	influxdb2 "github.com/influxdata/influxdb-client-go"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -73,6 +74,12 @@ var (
 	ignoreOSTStats bool
 	reportJobStats bool
 	runDaemonized  bool
+	feedToInflux   bool
+	influxServer   string
+	influxPort     string
+	influxOrg      string
+	influxBucket   string
+	influxToken    string
 	flgVersion     bool
 	buildSha1      string // sha1 revision used to build the program
 	buildTime      string // when the executable was built
@@ -277,8 +284,8 @@ func sortJobsMapIntoSlice(mapToSort map[string]map[string]map[string]uint64) []s
 }
 
 func printStats(mapStats map[string]map[string]uint64, slcDevices []string, slcCounters []string) {
-	fmt.Printf("%20s", "Device")
 
+	fmt.Printf("%20s", "Device")
 	for _, item := range slcCounters {
 		fmt.Printf("%13s", item)
 	}
@@ -298,6 +305,25 @@ func printStats(mapStats map[string]map[string]uint64, slcDevices []string, slcC
 		}
 		fmt.Print("\n")
 	}
+}
+
+func feedStatsToInflux(mapStats map[string]map[string]uint64, slcDevices []string, slcCounters []string) {
+
+	influxClient := influxdb2.NewClient("http://"+influxServer+":"+influxPort, influxToken)
+	var influxWriteAPI = influxClient.WriteAPI(influxOrg, influxBucket)
+
+	for _, device := range slcDevices {
+		influxLine := "lure,server=" + hostname + ",device=" + device + ",type=stats "
+		var fieldKeyValues []string
+		for _, counter := range slcCounters {
+			if v, found := mapStats[device][counter]; found {
+				fieldKeyValues = append(fieldKeyValues, counter+"="+strconv.FormatUint(v, 10))
+			}
+		}
+		influxWriteAPI.WriteRecord(fmt.Sprintf(influxLine + " " + strings.Join(fieldKeyValues, ",")))
+	}
+	influxWriteAPI.Flush()
+	influxClient.Close()
 }
 
 func printJobStats(mapJobStats map[string]map[string]map[string]uint64, slcJobs []string, slcCounters []string) {
@@ -328,6 +354,28 @@ func printJobStats(mapJobStats map[string]map[string]map[string]uint64, slcJobs 
 	}
 }
 
+func feedJobStatsToInflux(mapJobStats map[string]map[string]map[string]uint64, slcJobs []string, slcCounters []string) {
+
+	influxClient := influxdb2.NewClient("http://"+influxServer+":"+influxPort, influxToken)
+	var influxWriteAPI = influxClient.WriteAPI(influxOrg, influxBucket)
+
+	for _, jobHash := range slcJobs {
+		var device = strings.Split(jobHash, "@@")[0]
+		var job = strings.Split(jobHash, "@@")[1]
+
+		influxLine := "lure,server=" + hostname + ",device=" + device + ",type=job_stats," + "job=" + job + " "
+		var fieldKeyValues []string
+		for _, counter := range slcCounters {
+			if v, found := mapJobStats[device][job][counter]; found {
+				fieldKeyValues = append(fieldKeyValues, counter+"="+strconv.FormatUint(v, 10))
+			}
+		}
+		influxWriteAPI.WriteRecord(fmt.Sprintf(influxLine + " " + strings.Join(fieldKeyValues, ",")))
+	}
+	influxWriteAPI.Flush()
+	influxClient.Close()
+}
+
 func main() {
 
 	var httpPort int
@@ -339,6 +387,14 @@ func main() {
 	flag.BoolVar(&reportJobStats, "jobstats", false, "Report Lustre Jobstats for MDT and OST devices.")
 	flag.BoolVar(&runDaemonized, "daemon", false, "Run as daemon in the background. No console output but stats available via web interface.")
 	flag.BoolVar(&flgVersion, "version", false, "Print version information.")
+	flag.BoolVar(&feedToInflux, "feedtoinflux", false, "Store statistics in InfluxDB")
+	flag.StringVar(&influxServer, "influxserver", "localhost", "InfluxDB server name or IP")
+	flag.StringVar(&influxPort, "influxport", "8086", "InfluxDB server port")
+	flag.StringVar(&influxOrg, "influxorg", "storagebit", "InfluxDB org")
+	flag.StringVar(&influxBucket, "influxbucket", "lure", "InfluxDB bucket")
+	flag.StringVar(&influxToken, "influxtoken",
+		"lure:password",
+		"Read/Write token for the bucket or user:password in the InfluxDB")
 
 	flag.Parse()
 
@@ -446,6 +502,9 @@ func main() {
 			fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
 			if len(mapMDTCalcStats) != 0 {
 				printStats(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+				if feedToInflux {
+					feedStatsToInflux(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+				}
 			} else {
 				fmt.Println("No MDT stats available.")
 			}
@@ -453,6 +512,9 @@ func main() {
 			fmt.Println(tm.Bold("OST Operation Stats /s:"))
 			if len(mapOSTCalcStats) != 0 {
 				printStats(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+				if feedToInflux {
+					feedStatsToInflux(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+				}
 			} else {
 				fmt.Println("No OST stats available.")
 			}
@@ -460,7 +522,9 @@ func main() {
 			fmt.Println(tm.Bold("MDT Jobstats /s:"))
 			if len(mapMDTJobStats) != 0 {
 				printJobStats(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
-
+				if feedToInflux {
+					feedJobStatsToInflux(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
+				}
 			} else {
 				fmt.Println("No MDT Jobstats available.")
 			}
@@ -468,9 +532,26 @@ func main() {
 			fmt.Println(tm.Bold("OST Jobstats /s:"))
 			if len(mapOSTJobStats) != 0 {
 				printJobStats(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
-
+				if feedToInflux {
+					feedJobStatsToInflux(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
+				}
 			} else {
 				fmt.Println("No OST Jobstats available.")
+			}
+		} else {
+			if feedToInflux {
+				if len(mapMDTCalcStats) != 0 {
+					feedStatsToInflux(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+				}
+				if len(mapOSTCalcStats) != 0 {
+					feedStatsToInflux(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+				}
+				if len(mapMDTJobStats) != 0 {
+					feedJobStatsToInflux(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
+				}
+				if len(mapOSTJobStats) != 0 {
+					feedJobStatsToInflux(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
+				}
 			}
 		}
 	}
