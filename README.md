@@ -4,10 +4,11 @@ Lustre Filesystem Realtime Resource Explorer
 ## What is it?
 lure is a tool allowing you to monitor lustre components statistics and status in realtime via a very simple to use commandline utility. 
 
-It also provides the stats available via web browser interface.
+It also provides the stats available via web browser interface and supports a direct feed into an InfluxDB.
 
 ## What's new in this version?
-- reporting the stats in JSON format via HTTP Get. RESTish I guess... 
+- feed stats and job stats directly into an InfluxDB
+- comes with an example overview Grafana dashboard 
 
 ## Note
 For ldiskfs based lustre systems only. No plans and no desire to support ZFS specific stuff.
@@ -29,12 +30,13 @@ I'll also add more code documentation as I work on it and time allows.
 - Report MDT and OST performance statistics, incl. jobstats
 - All stats can be pulled via HTTP Get. Details further down
 
+### InfluxDB support
+- feed all MDT and OST stats and jobstats directly into an InfluxDB
+- support for InfluxDB 1.8 or 2.x or later
+
 ## Stuff I'm working on for the next release
 - Continuous code clean up 
 - Add capacity and inode ldiskfs consumption reporting
-
-## A bit further out
-- Feed stats directly into InfluxDB
 
 ## Installation
 Quite simple actually. 
@@ -49,21 +51,31 @@ Also, quite simple.
 $ ./lure -h
 Usage of ./lure:
   -daemon
-        Run as daemon in the background. No console output but stats available via web interface.
+    	Run as daemon in the background. No console output but stats available via web interface.
+  -feedtoinflux
+    	Store statistics in InfluxDB
+  -ignore
+    	Don't report OST stats.
   -ignoremdt
-        Don't report MDT stats.
-  -ignoreost
-        Don't report OST stats.
+    	Don't report MDT stats.
+  -influxbucket string
+    	InfluxDB bucket (default "lure")
+  -influxorg string
+    	InfluxDB org (default "storagebit")
+  -influxport string
+    	InfluxDB server port (default "8086")
+  -influxserver string
+    	InfluxDB server name or IP (default "localhost")
+  -influxtoken string
+    	Read/Write token for the bucket or user:password in the InfluxDB (default "lure:password")
   -interval int
-        Sample interval in seconds (default 1)
+    	Sample interval in seconds (default 1)
   -jobstats
-        Report Lustre Jobstats for MDT and OST devices.
+    	Report Lustre Jobstats for MDT and OST devices.
   -port int
-        HTTP port used to access the the stats via web browser. (default 8666)
+    	HTTP port used to access the the stats via web browser. (default 8666)
   -version
-        Print version information.
-
-
+    	Print version information.
 ```
 To access the stats via web browser use: `http://<ip address>:<port number>/stats` as the URL
 
@@ -88,5 +100,14 @@ OST Operation Stats /s:
 - OST Jobstats via HTTP Get at `http://<ip address>:<port number>/json?stats=ostjob`
 
 Returns HTTP status 204 if there is no data to display, HTTP status 500 if there is an internal error, or HTTP status 400 if the request/URL was incorrect.
+
+## Note on InlfuxDB
+- lure supports v1.8+ and the new InfluxDB format as introduced with version 2.x+
+- If you use v1.8+, as I do mostly, create the DB manually and setup user credentials with read/write access for the DB
+- For v1.8+, use the database name or the database/retention_policy name as "bucket" and the user:password for the token
+
+## Note on the example Grafana dashboard
+- setup the InfluxDB data source as v1 InfluxDB connection
+- Don't forget to match the sample intervall to the lure intervall
 
 ## Happy Lustre Monitoring!
