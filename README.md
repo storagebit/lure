@@ -2,7 +2,7 @@
 Lustre Filesystem Realtime Resource Explorer
 
 ## What is it?
-lure is a tool allowing you to monitor lustre components statistics and status in realtime via a very simple to use commandline utility. On the servers or the clients. 
+One single binary does it all! lure is a tool allowing you to monitor lustre clients, OSS and MDS serversin realtime with a very simple to use commandline utility.
 
 It also provides the stats available via web browser interface and supports a direct feed server and client statistics into an InfluxDB.
 
