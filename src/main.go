@@ -44,20 +44,24 @@ import (
 var (
 	interval int
 
-	pathToMDTs = "/proc/fs/lustre/mdt"
-	pathToOSTs = "/proc/fs/lustre/obdfilter"
+	pathToMDTs             = "/proc/fs/lustre/mdt"
+	pathToOSTs             = "/proc/fs/lustre/obdfilter"
+	pathToLliteFilesystems = "/proc/fs/lustre/llite"
 
-	mapMDTCalcStats = make(map[string]map[string]uint64)
-	mapOSTCalcStats = make(map[string]map[string]uint64)
-	mapMDTJobStats  = make(map[string]map[string]map[string]uint64)
-	mapOSTJobStats  = make(map[string]map[string]map[string]uint64)
-	mapMDTs         = make(map[string]string)
-	mapOSTs         = make(map[string]string)
+	mapMDTCalcStats     = make(map[string]map[string]uint64)
+	mapOSTCalcStats     = make(map[string]map[string]uint64)
+	mapLliteCalcStats   = make(map[string]map[string]uint64)
+	mapMDTJobStats      = make(map[string]map[string]map[string]uint64)
+	mapOSTJobStats      = make(map[string]map[string]map[string]uint64)
+	mapMDTs             = make(map[string]string)
+	mapOSTs             = make(map[string]string)
+	mapLliteFilesystems = make(map[string]string)
 
-	sortedMTDDevices []string
-	sortedOSTDevices []string
-	sortedMDTJobs    []string
-	sortedOSTJobs    []string
+	sortedMTDDevices       []string
+	sortedOSTDevices       []string
+	sortedLliteFilesystems []string
+	sortedMDTJobs          []string
+	sortedOSTJobs          []string
 
 	mdtCounters = []string{"open", "close", "mknod", "link", "unlink", "mkdir", "rmdir", "rename", "getattr",
 		"setattr", "getxattr", "setxattr", "statfs", "sync", "read_bytes", "write_bytes"}
@@ -67,14 +71,19 @@ var (
 		"get_info", "set_info"}
 	ostJobStatsCounters = []string{"read_bytes", "write_bytes", "getattr", "setattr", "punch", "sync", "destroy",
 		"create", "statfs", "get_info", "set_info", "quotactl"}
+	lliteCounters = []string{"read_bytes", "write_bytes", "ioctl", "open", "close", "mmap", "page_fault", "seek",
+		"fsync", "readdir", "setattr", "truncate", "flock", "getattr", "unlink", "symlink", "mkdir", "rmdir", "rename",
+		"alloc_inode", "setxattr"}
 
-	hostname, _ = os.Hostname()
+	hostnameLong, _ = os.Hostname()
+	hostname        = strings.Split(hostnameLong, ".")[0]
 
 	ignoreMDTStats bool
 	ignoreOSTStats bool
 	reportJobStats bool
 	runDaemonized  bool
 	feedToInflux   bool
+	client         bool
 	influxServer   string
 	influxPort     string
 	influxOrg      string
@@ -84,6 +93,8 @@ var (
 	buildSha1      string // sha1 revision used to build the program
 	buildTime      string // when the executable was built
 	buildBranch    string
+	buildOS        string
+	buildGoVersion string
 )
 
 func checkContinue(e error) {
@@ -119,6 +130,23 @@ func getOSTs() {
 	if len(mapOSTs) == 0 {
 		log.Println("No OSTs found.")
 		ignoreOSTStats = true
+	}
+}
+
+func getLliteFilesystems() {
+	files, err := ioutil.ReadDir(pathToLliteFilesystems)
+	checkContinue(err)
+	for _, entry := range files {
+		if entry.IsDir() {
+			log.Println("Found:", entry.Name())
+			mapLliteFilesystems[entry.Name()] = pathToLliteFilesystems + "/" + entry.Name() + "/stats"
+		}
+	}
+	if len(mapLliteFilesystems) == 0 {
+		log.Println("No mounted filesystems on this client found.")
+		client = false
+	} else {
+		client = true
 	}
 }
 
@@ -285,13 +313,21 @@ func sortJobsMapIntoSlice(mapToSort map[string]map[string]map[string]uint64) []s
 
 func printStats(mapStats map[string]map[string]uint64, slcDevices []string, slcCounters []string) {
 
-	fmt.Printf("%20s", "Device")
+	if client == true {
+		fmt.Printf("%10s", "Device")
+	} else {
+		fmt.Printf("%20s", "Device")
+	}
 	for _, item := range slcCounters {
 		fmt.Printf("%13s", item)
 	}
 	fmt.Print("\n")
 	for _, device := range slcDevices {
-		fmt.Printf("%20s", device)
+		if client == true {
+			fmt.Printf("%10s", strings.Split(device, "-")[0])
+		} else {
+			fmt.Printf("%20s", device)
+		}
 		for _, counter := range slcCounters {
 			if v, found := mapStats[device][counter]; found {
 				if strings.Contains(counter, "bytes") {
@@ -383,7 +419,7 @@ func main() {
 	flag.IntVar(&interval, "interval", 1, "Sample interval in seconds")
 	flag.IntVar(&httpPort, "port", 8666, "HTTP port used to access the the stats via web browser.")
 	flag.BoolVar(&ignoreMDTStats, "ignoremdt", false, "Don't report MDT stats.")
-	flag.BoolVar(&ignoreOSTStats, "ignore", false, "Don't report OST stats.")
+	flag.BoolVar(&ignoreOSTStats, "ignoreost", false, "Don't report OST stats.")
 	flag.BoolVar(&reportJobStats, "jobstats", false, "Report Lustre Jobstats for MDT and OST devices.")
 	flag.BoolVar(&runDaemonized, "daemon", false, "Run as daemon in the background. No console output but stats available via web interface.")
 	flag.BoolVar(&flgVersion, "version", false, "Print version information.")
@@ -399,7 +435,11 @@ func main() {
 	flag.Parse()
 
 	if flgVersion {
-		fmt.Printf("Build on: %s from branch: %s with sha1: %s\n", buildTime, buildBranch, buildSha1)
+		fmt.Printf("Build date:\t%s\n"+
+			"From branch:\t%s\n"+
+			"With sha1:\t%s\n"+
+			"On:\t\t%s\n"+
+			"Using:\t\t%s\n", buildTime, buildBranch, buildSha1, buildOS, buildGoVersion)
 		os.Exit(0)
 	}
 
@@ -414,9 +454,12 @@ func main() {
 	if ignoreMDTStats != true {
 		getMDTs()
 	}
+
 	if ignoreOSTStats != true {
 		getOSTs()
 	}
+
+	getLliteFilesystems()
 
 	for {
 		timeInterval := time.Duration(interval) * time.Second
@@ -425,7 +468,7 @@ func main() {
 			tm.Clear()
 			tm.MoveCursor(1, 1)
 			currentTime := time.Now()
-			strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " +
+			strHeader := "Lustre node: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " +
 				strconv.Itoa(interval) + "s"
 			_, _ = tm.Println(tm.Background(tm.Color(tm.Bold(strHeader), tm.BLACK), tm.GREEN))
 		}
@@ -446,40 +489,62 @@ func main() {
 		var mapOSTPrevJobStats = make(map[string]map[string]map[string]uint64)
 		var mapOSTPrevJobStatsRaw = make(map[string][]byte)
 		var mapOSTNewJobStatsRaw = make(map[string][]byte)
+		var mapLlitePrevStats = make(map[string]map[string]uint64)
+		var mapLliteNewStats = make(map[string]map[string]uint64)
+		var mapLlitePrevStatsRaw = make(map[string][]byte)
+		var mapLliteNewStatsRaw = make(map[string][]byte)
 
-		if ignoreMDTStats != true {
+		if (ignoreMDTStats != true) && (client != true) {
 			mapMDTPrevStatsRaw = readStatsFile(mapMDTs)
 		}
-		if ignoreOSTStats != true {
+
+		if (ignoreOSTStats != true) && (client != true) {
 			mapOSTPrevStatsRaw = readStatsFile(mapOSTs)
 		}
-		if reportJobStats == true {
+
+		if client == true {
+			mapLlitePrevStatsRaw = readStatsFile(mapLliteFilesystems)
+		}
+
+		if (reportJobStats == true) && (client != true) {
 			mapMDTPrevJobStatsRaw = readJobStatsFile(mapMDTs, "mdt")
 			mapOSTPrevJobStatsRaw = readJobStatsFile(mapOSTs, "obdfilter")
 		}
 
 		time.Sleep(timeInterval)
 
-		if ignoreMDTStats != true {
+		if (ignoreMDTStats != true) && (client != true) {
 			mapMDTNewStatsRaw = readStatsFile(mapMDTs)
 		}
-		if ignoreOSTStats != true {
+
+		if (ignoreOSTStats != true) && (client != true) {
 			mapOSTNewStatsRaw = readStatsFile(mapOSTs)
 		}
+
+		if client == true {
+			mapLliteNewStatsRaw = readStatsFile(mapLliteFilesystems)
+		}
+
 		if reportJobStats == true {
 			mapMDTNewJobStatsRaw = readJobStatsFile(mapMDTs, "mdt")
 			mapOSTNewJobStatsRaw = readJobStatsFile(mapOSTs, "obdfilter")
 		}
 
-		if ignoreMDTStats != true {
+		if (ignoreMDTStats != true) && (client != true) {
 			mapMDTPrevStats = parseRAWSats(mapMDTPrevStatsRaw)
 			mapMDTNewStats = parseRAWSats(mapMDTNewStatsRaw)
 			mapMDTCalcStats = calcStats(mapMDTPrevStats, mapMDTNewStats)
 		}
-		if ignoreOSTStats != true {
+		if (ignoreOSTStats != true) && (client != true) {
 			mapOSTPrevStats = parseRAWSats(mapOSTPrevStatsRaw)
 			mapOSTNewStats = parseRAWSats(mapOSTNewStatsRaw)
 			mapOSTCalcStats = calcStats(mapOSTPrevStats, mapOSTNewStats)
+		}
+
+		if client == true {
+			mapLlitePrevStats = parseRAWSats(mapLlitePrevStatsRaw)
+			mapLliteNewStats = parseRAWSats(mapLliteNewStatsRaw)
+			mapLliteCalcStats = calcStats(mapLlitePrevStats, mapLliteNewStats)
 		}
 
 		if reportJobStats == true {
@@ -495,48 +560,69 @@ func main() {
 
 		sortedMTDDevices = sortStatsMapIntoSlice(mapMDTCalcStats)
 		sortedOSTDevices = sortStatsMapIntoSlice(mapOSTCalcStats)
+		sortedLliteFilesystems = sortStatsMapIntoSlice(mapLliteCalcStats)
 
 		if runDaemonized != true {
 
 			tm.Flush()
-			fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
-			if len(mapMDTCalcStats) != 0 {
-				printStats(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
-				if feedToInflux {
-					feedStatsToInflux(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+			if client != true {
+				fmt.Println(tm.Bold("MDT Metadata Stats /s:"))
+				if len(mapMDTCalcStats) != 0 {
+					printStats(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+					if feedToInflux {
+						feedStatsToInflux(mapMDTCalcStats, sortedMTDDevices, mdtCounters)
+					}
+				} else {
+					fmt.Println("No MDT stats available.")
 				}
-			} else {
-				fmt.Println("No MDT stats available.")
+				fmt.Println()
 			}
-			fmt.Println()
-			fmt.Println(tm.Bold("OST Operation Stats /s:"))
-			if len(mapOSTCalcStats) != 0 {
-				printStats(mapOSTCalcStats, sortedOSTDevices, ostCounters)
-				if feedToInflux {
-					feedStatsToInflux(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+			if client != true {
+				fmt.Println(tm.Bold("OST Operation Stats /s:"))
+				if len(mapOSTCalcStats) != 0 {
+					printStats(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+					if feedToInflux {
+						feedStatsToInflux(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+					}
+				} else {
+					fmt.Println("No OST stats available.")
 				}
-			} else {
-				fmt.Println("No OST stats available.")
+				fmt.Println()
 			}
-			fmt.Println()
-			fmt.Println(tm.Bold("MDT Jobstats /s:"))
-			if len(mapMDTJobStats) != 0 {
-				printJobStats(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
-				if feedToInflux {
-					feedJobStatsToInflux(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
+			if client == true {
+				fmt.Println(tm.Bold("Client Operation Stats /s:"))
+				if len(mapLliteCalcStats) != 0 {
+					printStats(mapLliteCalcStats, sortedLliteFilesystems, lliteCounters)
+					if feedToInflux {
+						feedStatsToInflux(mapLliteCalcStats, sortedLliteFilesystems, lliteCounters)
+					}
+				} else {
+					fmt.Println("No Client stats available.")
 				}
-			} else {
-				fmt.Println("No MDT Jobstats available.")
+				fmt.Println()
 			}
-			fmt.Println()
-			fmt.Println(tm.Bold("OST Jobstats /s:"))
-			if len(mapOSTJobStats) != 0 {
-				printJobStats(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
-				if feedToInflux {
-					feedJobStatsToInflux(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
+			if client != true {
+				fmt.Println(tm.Bold("MDT Jobstats /s:"))
+				if len(mapMDTJobStats) != 0 {
+					printJobStats(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
+					if feedToInflux {
+						feedJobStatsToInflux(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
+					}
+				} else {
+					fmt.Println("No MDT Jobstats available.")
 				}
-			} else {
-				fmt.Println("No OST Jobstats available.")
+				fmt.Println()
+			}
+			if client != true {
+				fmt.Println(tm.Bold("OST Jobstats /s:"))
+				if len(mapOSTJobStats) != 0 {
+					printJobStats(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
+					if feedToInflux {
+						feedJobStatsToInflux(mapOSTJobStats, sortedOSTJobs, ostJobStatsCounters)
+					}
+				} else {
+					fmt.Println("No OST Jobstats available.")
+				}
 			}
 		} else {
 			if feedToInflux {
@@ -545,6 +631,9 @@ func main() {
 				}
 				if len(mapOSTCalcStats) != 0 {
 					feedStatsToInflux(mapOSTCalcStats, sortedOSTDevices, ostCounters)
+				}
+				if len(mapLliteCalcStats) != 0 {
+					feedStatsToInflux(mapLliteCalcStats, sortedLliteFilesystems, lliteCounters)
 				}
 				if len(mapMDTJobStats) != 0 {
 					feedJobStatsToInflux(mapMDTJobStats, sortedMDTJobs, mdtJobStatsCounters)
@@ -559,102 +648,137 @@ func main() {
 
 func httpStats(w http.ResponseWriter, _ *http.Request) {
 	currentTime := time.Now()
-	strHeader := "Server: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " +
+	strHeader := "Lustre node: " + hostname + " | Time: " + currentTime.String() + " | Sample Interval: " +
 		strconv.Itoa(interval) + "s"
 	_, _ = fmt.Fprintln(w, strHeader)
-	_, _ = fmt.Fprintln(w, "MDT Metadata Stats /s:")
-	_, _ = fmt.Fprintf(w, "%15s", "Device")
-	for _, item := range mdtCounters {
-		_, _ = fmt.Fprintf(w, "%10s", item)
-	}
-	_, _ = fmt.Fprint(w, "\n")
-	for mdt, counters := range mapMDTCalcStats {
-		_, _ = fmt.Fprintf(w, "%20s", mdt)
-		for _, counter := range mdtCounters {
-			if v, found := counters[counter]; found {
-				_, _ = fmt.Fprintf(w, "%13d", v)
-			} else {
-				_, _ = fmt.Fprintf(w, "%13d", 0)
-			}
+	if client != true {
+		_, _ = fmt.Fprintln(w, "MDT Metadata Stats /s:")
+		_, _ = fmt.Fprintf(w, "%15s", "Device")
+		for _, item := range mdtCounters {
+			_, _ = fmt.Fprintf(w, "%10s", item)
 		}
 		_, _ = fmt.Fprint(w, "\n")
-	}
-	_, _ = fmt.Fprintln(w, "\nOST Operation Stats /s:")
-	_, _ = fmt.Fprintf(w, "%20s", "Device")
-	for _, item := range ostCounters {
-		_, _ = fmt.Fprintf(w, "%13s", item)
-	}
-	_, _ = fmt.Fprint(w, "\n")
-	for ost, counters := range mapOSTCalcStats {
-		_, _ = fmt.Fprintf(w, "%20s", ost)
-		for _, counter := range ostCounters {
-			if v, found := counters[counter]; found {
-				if strings.Contains(counter, "bytes") {
-					_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
-				} else {
-					_, _ = fmt.Fprintf(w, "%13d", v)
-				}
-			} else {
-				_, _ = fmt.Fprintf(w, "%13d", 0)
-			}
-		}
-		_, _ = fmt.Fprint(w, "\n")
-	}
-	_, _ = fmt.Fprint(w, "\n")
 
-	_, _ = fmt.Fprint(w, "MDT Jobstats /s:")
-	_, _ = fmt.Fprint(w, "\n")
-	if len(mapMDTJobStats) != 0 {
-		_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
-		for _, item := range mdtJobStatsCounters {
-			_, _ = fmt.Fprintf(w, "%13s", item)
-		}
-		_, _ = fmt.Fprint(w, "\n")
-		for mdt, jobs := range mapMDTJobStats {
-			for job, counters := range jobs {
-				_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(mdt, "-")[1])
-				for _, counter := range mdtJobStatsCounters {
-					if v, found := counters[counter]; found {
-						if strings.Contains(counter, "bytes") {
-							_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
-						} else {
-							_, _ = fmt.Fprintf(w, "%13d", v)
-						}
-					} else {
-						_, _ = fmt.Fprintf(w, "%13d", 0)
-					}
+		for mdt, counters := range mapMDTCalcStats {
+			_, _ = fmt.Fprintf(w, "%20s", mdt)
+			for _, counter := range mdtCounters {
+				if v, found := counters[counter]; found {
+					_, _ = fmt.Fprintf(w, "%13d", v)
+				} else {
+					_, _ = fmt.Fprintf(w, "%13d", 0)
 				}
-				_, _ = fmt.Fprint(w, "\n")
 			}
+			_, _ = fmt.Fprint(w, "\n")
 		}
-	} else {
-		_, _ = fmt.Fprint(w, "\nNo MDT Jobstats available.")
 	}
-	if len(mapOSTJobStats) != 0 {
-		_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
-		for _, item := range ostJobStatsCounters {
+	if client != true {
+		_, _ = fmt.Fprintln(w, "\nOST Operation Stats /s:")
+		_, _ = fmt.Fprintf(w, "%20s", "Device")
+		for _, item := range ostCounters {
 			_, _ = fmt.Fprintf(w, "%13s", item)
 		}
 		_, _ = fmt.Fprint(w, "\n")
-		for ost, jobs := range mapOSTJobStats {
-			for job, counters := range jobs {
-				_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(ost, "-")[1])
-				for _, counter := range mdtJobStatsCounters {
-					if v, found := counters[counter]; found {
-						if strings.Contains(counter, "bytes") {
-							_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
-						} else {
-							_, _ = fmt.Fprintf(w, "%13d", v)
-						}
+		for ost, counters := range mapOSTCalcStats {
+			_, _ = fmt.Fprintf(w, "%20s", ost)
+			for _, counter := range ostCounters {
+				if v, found := counters[counter]; found {
+					if strings.Contains(counter, "bytes") {
+						_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
 					} else {
-						_, _ = fmt.Fprintf(w, "%13d", 0)
+						_, _ = fmt.Fprintf(w, "%13d", v)
 					}
+				} else {
+					_, _ = fmt.Fprintf(w, "%13d", 0)
 				}
-				_, _ = fmt.Fprint(w, "\n")
 			}
+			_, _ = fmt.Fprint(w, "\n")
 		}
-	} else {
-		_, _ = fmt.Fprint(w, "\nNo OST Jobstats available.")
+		_, _ = fmt.Fprint(w, "\n")
+	}
+	if client == true {
+		_, _ = fmt.Fprintln(w, "\nClient Operation Stats /s:")
+		_, _ = fmt.Fprintf(w, "%10s", "Filesystem")
+		for _, item := range lliteCounters {
+			_, _ = fmt.Fprintf(w, "%13s", item)
+		}
+		_, _ = fmt.Fprint(w, "\n")
+		for filesystem, counters := range mapLliteCalcStats {
+			_, _ = fmt.Fprintf(w, "%10s", strings.Split(filesystem, "-")[0])
+			for _, counter := range lliteCounters {
+				if v, found := counters[counter]; found {
+					if strings.Contains(counter, "bytes") {
+						_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+					} else {
+						_, _ = fmt.Fprintf(w, "%13d", v)
+					}
+				} else {
+					_, _ = fmt.Fprintf(w, "%13d", 0)
+				}
+			}
+			_, _ = fmt.Fprint(w, "\n")
+		}
+		_, _ = fmt.Fprint(w, "\n")
+	}
+	if client != true {
+		_, _ = fmt.Fprint(w, "MDT Jobstats /s:")
+		_, _ = fmt.Fprint(w, "\n")
+
+		_, _ = fmt.Fprint(w, "MDT Jobstats /s:")
+		_, _ = fmt.Fprint(w, "\n")
+		if len(mapMDTJobStats) != 0 {
+			_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
+			for _, item := range mdtJobStatsCounters {
+				_, _ = fmt.Fprintf(w, "%13s", item)
+			}
+			_, _ = fmt.Fprint(w, "\n")
+			for mdt, jobs := range mapMDTJobStats {
+				for job, counters := range jobs {
+					_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(mdt, "-")[1])
+					for _, counter := range mdtJobStatsCounters {
+						if v, found := counters[counter]; found {
+							if strings.Contains(counter, "bytes") {
+								_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+							} else {
+								_, _ = fmt.Fprintf(w, "%13d", v)
+							}
+						} else {
+							_, _ = fmt.Fprintf(w, "%13d", 0)
+						}
+					}
+					_, _ = fmt.Fprint(w, "\n")
+				}
+			}
+		} else {
+			_, _ = fmt.Fprint(w, "\nNo MDT Jobstats available.")
+		}
+	}
+	if client != true {
+		if len(mapOSTJobStats) != 0 {
+			_, _ = fmt.Fprintf(w, "%20s", "Job @ Device")
+			for _, item := range ostJobStatsCounters {
+				_, _ = fmt.Fprintf(w, "%13s", item)
+			}
+			_, _ = fmt.Fprint(w, "\n")
+			for ost, jobs := range mapOSTJobStats {
+				for job, counters := range jobs {
+					_, _ = fmt.Fprintf(w, "%20s", job+"@"+strings.Split(ost, "-")[1])
+					for _, counter := range mdtJobStatsCounters {
+						if v, found := counters[counter]; found {
+							if strings.Contains(counter, "bytes") {
+								_, _ = fmt.Fprintf(w, "%13s", humanize.Bytes(v))
+							} else {
+								_, _ = fmt.Fprintf(w, "%13d", v)
+							}
+						} else {
+							_, _ = fmt.Fprintf(w, "%13d", 0)
+						}
+					}
+					_, _ = fmt.Fprint(w, "\n")
+				}
+			}
+		} else {
+			_, _ = fmt.Fprint(w, "\nNo OST Jobstats available.")
+		}
 	}
 }
 
@@ -676,6 +800,13 @@ func jsonStats(w http.ResponseWriter, r *http.Request) {
 		case "ost":
 			if len(mapOSTCalcStats) > 0 {
 				jsonData, _ := json.Marshal(mapOSTCalcStats)
+				_, _ = w.Write(jsonData)
+			} else {
+				w.WriteHeader(http.StatusNoContent)
+			}
+		case "client":
+			if len(mapLliteCalcStats) > 0 {
+				jsonData, _ := json.Marshal(mapLliteCalcStats)
 				_, _ = w.Write(jsonData)
 			} else {
 				w.WriteHeader(http.StatusNoContent)

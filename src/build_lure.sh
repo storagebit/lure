@@ -37,4 +37,6 @@ go get -v github.com/influxdata/influxdb-client-go
 echo -e "Compiling the binary/executable"
 go build -x -o ../bin/lure -ldflags "-X main.buildSha1=$(git rev-parse HEAD)  \
                                   -X main.buildBranch=$(git rev-parse --abbrev-ref HEAD) \
-                                  -X main.buildTime=$(date +'%Y-%m-%d_%T')"
+                                  -X main.buildTime=$(date +'%Y-%m-%d_%T') \
+                                  -X main.buildOS=$(uname -r) \
+                                  -X main.buildGoVersion=$(go version | cut -d ' ' -f 3)"
