@@ -45,7 +45,7 @@ I'll also add more code documentation as I work on it and time allows.
 
 ## Installation
 Quite simple actually. 
-Just download the binary from here and run it on your MDS or OSS.
+Just download the binary from here and run it on your Lustre client, MDS or OSS.
 
 Or `git clone https://github.com/storagebit/lure/` and `cd` into the `bin` directory where you find the binary or build and compile it from the source using the `build_lure.sh` bash script in the `src` directory.
 The choice is yours.
